@@ -51,10 +51,12 @@ cd vantage
 pip install -e .          # or: pipx install .
 ```
 
-Or skip installing entirely — it is stdlib-only, so it runs from the checkout:
+Or skip installing entirely — it is stdlib-only, so it runs from the checkout,
+and the bundled launcher can be symlinked straight onto your PATH:
 
 ```bash
-python3 -m vantage
+python3 -m vantage                              # run in place
+ln -s "$PWD/bin/vantage" /usr/local/bin/vantage # or put it on PATH
 ```
 
 ## Use

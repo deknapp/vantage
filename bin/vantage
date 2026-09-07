@@ -1,0 +1,12 @@
+#!/bin/sh
+# Standalone launcher. vantage is stdlib-only, so there is nothing to install:
+# symlink this onto your PATH and it runs straight from the checkout.
+#
+#   ln -s "$PWD/bin/vantage" /usr/local/bin/vantage
+#
+# Resolves one level of symlink so the checkout can live anywhere.
+target=$(readlink "$0" 2>/dev/null) || target=""
+[ -n "$target" ] || target="$0"
+case "$target" in /*) ;; *) target="$(dirname "$0")/$target" ;; esac
+root=$(cd "$(dirname "$target")/.." && pwd)
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m vantage "$@"

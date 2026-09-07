@@ -95,13 +95,19 @@ def render(data, ink=None, top=10):
 
     # --- headline numbers ----------------------------------------------
     A("")
+    # A delta is only meaningful once we hold data for the earlier window;
+    # before that "+25" would just be measuring when syncing started.
+    cmp_ok = s.get("comparable")
     A("  %s   %s   %s" % (
-        _stat(ink, "visitors", s["visitors_14d"], s["visitors_delta"]),
-        _stat(ink, "views", s["views_14d"], s["views_delta"]),
+        _stat(ink, "visitors", s["visitors_14d"],
+              s["visitors_delta"] if cmp_ok else None),
+        _stat(ink, "views", s["views_14d"],
+              s["views_delta"] if cmp_ok else None),
         _stat(ink, "clones", s["clones_window"], None),
     ))
-    A(ink.dim("     last 14 days, vs the 14 before        clones over %dd"
-              % data["window_days"]))
+    A(ink.dim("     last 14 days%s        clones over %dd"
+              % (", vs the 14 before" if cmp_ok else " (no earlier history yet)",
+                 data["window_days"])))
 
     # --- timeline -------------------------------------------------------
     tl = data["timeline"]

@@ -30,3 +30,6 @@ vantage = "vantage.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["vantage*"]
+
+[tool.setuptools.package-data]
+vantage = ["assets/*.html"]

@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from . import classify, store
+from . import classify, demo, store
 
 
 def _fill_days(rows, days):
@@ -67,6 +67,11 @@ def build(conn, days=90, repo=None):
     signal = classify.referrer_signal(referrers)
     verdict_text, verdict_level = classify.verdict(signal, depth, recent_visitors)
 
+    # A delta is only honest once we actually hold data for the earlier window.
+    cov = store.coverage(conn)
+    prior_start = (dt.date.today() - dt.timedelta(days=27)).isoformat()
+    comparable = bool(cov["first_day"]) and cov["first_day"] <= prior_start
+
     repo_rows = store.repo_totals(conn, window)
     per_repo = store.per_repo_series(conn, window, "views")
     meta = {r["name"]: r for r in store.repos(conn)}
@@ -96,6 +101,7 @@ def build(conn, days=90, repo=None):
 
     return {
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "is_demo": demo.is_demo(conn),
         "window_days": window,
         "repo_filter": repo,
         "summary": {
@@ -111,6 +117,7 @@ def build(conn, days=90, repo=None):
             "cloners_window": sum(d["u"] for d in clones),
             "n_repos": len(repo_rows),
             "depth_score": round(depth, 3),
+            "comparable": comparable,
         },
         "verdict": {"text": verdict_text, "level": verdict_level},
         "signal": signal,
@@ -122,7 +129,7 @@ def build(conn, days=90, repo=None):
         "paths": paths,
         "path_kinds": sorted(kinds.values(), key=lambda k: -k["uniques"]),
         "events": store.events(conn),
-        "coverage": store.coverage(conn),
+        "coverage": cov,
         "caveats": [
             "GitHub keeps only 14 days of traffic. Days before your first sync "
             "are gone for good; the chart fills in as vantage keeps snapshotting.",

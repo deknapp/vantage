@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vantage — who is looking at your GitHub</title>
+<style>
+:root{
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --series-1:#2a78d6;  /* page views */
+  --series-2:#eb6834;  /* unique visitors */
+  --sig-5:#104281; --sig-4:#1c5cab; --sig-3:#2a78d6; --sig-2:#5598e7; --sig-1:#86b6ef;
+  --track:#cde2fb;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+  --shadow:0 1px 2px rgba(11,11,11,.04), 0 8px 24px rgba(11,11,11,.05);
+  --radius:10px;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --series-1:#3987e5; --series-2:#d95926;
+    --sig-5:#cde2fb; --sig-4:#9ec5f4; --sig-3:#6da7ec; --sig-2:#3987e5; --sig-1:#184f95;
+    --track:#184f95;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --plane:#0d0d0d; --surface:#1a1a19;
+  --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --series-1:#3987e5; --series-2:#d95926;
+  --sig-5:#cde2fb; --sig-4:#9ec5f4; --sig-3:#6da7ec; --sig-2:#3987e5; --sig-1:#184f95;
+  --track:#184f95;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--plane); color:var(--text-primary);
+  font:14px/1.55 var(--font);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1140px;margin:0 auto;padding:28px 24px 72px}
+
+/* ---------------------------------------------------------- header */
+header.top{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:22px}
+.brand{display:flex;align-items:baseline;gap:12px}
+.brand h1{font-size:21px;font-weight:650;letter-spacing:-.01em;margin:0}
+.brand .tag{color:var(--text-muted);font-size:13px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,button,input{
+  font:inherit;color:var(--text-primary);background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;padding:6px 10px;
+}
+select,button{cursor:pointer}
+button:hover,select:hover{border-color:var(--axis)}
+button.primary{background:var(--series-1);color:#fff;border-color:transparent;font-weight:550}
+button.primary:hover{filter:brightness(1.08)}
+button[disabled]{opacity:.55;cursor:progress}
+button.ghost{background:transparent}
+
+/* ---------------------------------------------------------- cards */
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow);
+}
+.card h2{font-size:15px;font-weight:600;margin:0 0 2px}
+.card .sub{color:var(--text-muted);font-size:12.5px;margin:0 0 16px}
+.grid{display:grid;gap:16px}
+.cols-2{grid-template-columns:1fr 1fr;align-items:start}
+@media (max-width:900px){.cols-2{grid-template-columns:1fr}}
+
+/* ---------------------------------------------------------- verdict */
+.verdict{display:flex;gap:14px;align-items:flex-start;margin-bottom:16px}
+.verdict .dot{width:11px;height:11px;border-radius:50%;flex:none;margin-top:7px}
+.verdict .dot.strong{background:var(--good)}
+.verdict .dot.moderate{background:var(--warning)}
+.verdict .dot.weak,.verdict .dot.none{background:var(--text-muted)}
+.verdict .body{flex:1}
+.verdict .q{font-size:12.5px;color:var(--text-muted);margin:0 0 3px}
+.verdict .a{font-size:17px;line-height:1.45;font-weight:550;margin:0;letter-spacing:-.005em}
+.verdict .lvl{font-size:12px;color:var(--text-secondary);margin-top:6px}
+
+/* ---------------------------------------------------------- stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px}
+@media (max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
+.stat .label{font-size:12.5px;color:var(--text-secondary);margin-bottom:6px}
+.stat .value{font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.stat.hero .value{font-size:48px}
+.stat .delta{font-size:12.5px;margin-top:5px;color:var(--text-muted)}
+.stat .delta .up{color:var(--good);font-weight:600}
+.stat .delta .down{color:var(--critical);font-weight:600}
+.stat .foot{font-size:12px;color:var(--text-muted);margin-top:6px}
+
+/* meter */
+.meter{height:8px;border-radius:4px;background:var(--track);overflow:hidden;margin-top:10px}
+.meter > i{display:block;height:100%;background:var(--series-1);border-radius:4px}
+
+/* ---------------------------------------------------------- legend */
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;font-size:12.5px;color:var(--text-secondary)}
+.legend .item{display:flex;align-items:center;gap:6px}
+.legend .swatch{width:11px;height:11px;border-radius:3px;flex:none}
+.legend .linekey{width:14px;height:2px;border-radius:2px;flex:none}
+
+/* ---------------------------------------------------------- charts */
+.chartbox{position:relative}
+svg{display:block;width:100%;overflow:visible}
+.tip{
+  position:absolute;pointer-events:none;z-index:9;opacity:0;transition:opacity .09s;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:9px 11px;font-size:12.5px;box-shadow:var(--shadow);min-width:150px;
+}
+.tip .d{color:var(--text-muted);margin-bottom:5px;font-size:11.5px}
+.tip .row{display:flex;justify-content:space-between;gap:14px;align-items:center}
+.tip .row b{font-variant-numeric:tabular-nums}
+.tip .key{display:flex;align-items:center;gap:6px;color:var(--text-secondary)}
+.tip .ev{margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-secondary)}
+
+/* ---------------------------------------------------------- bars */
+.bars{display:flex;flex-direction:column;gap:9px}
+.bar-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,2fr) auto;gap:12px;align-items:center;font-size:13px}
+.bar-row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)}
+.bar-row .name small{display:block;color:var(--text-muted);font-size:11.5px}
+/* Both are <span>s inside a grid row: blockify them, or width/height on an
+   inline box is silently ignored and the bars never draw. */
+.bar-track{display:block;height:16px;position:relative;background:transparent}
+.bar-fill{display:block;height:16px;border-radius:0 4px 4px 0;min-width:3px}
+.bar-row .val{font-variant-numeric:tabular-nums;color:var(--text-primary);font-weight:600;min-width:2.4em;text-align:right}
+
+/* ---------------------------------------------------------- table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{
+  text-align:left;font-weight:550;color:var(--text-secondary);font-size:12px;
+  padding:6px 10px 8px;border-bottom:1px solid var(--border);white-space:nowrap;
+}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text-primary)}
+th .arrow{opacity:.45;font-size:10px}
+td{padding:7px 10px;border-bottom:1px solid var(--grid)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:color-mix(in srgb, var(--grid) 45%, transparent)}
+td a{color:var(--text-primary);text-decoration:none;font-weight:500}
+td a:hover{text-decoration:underline}
+td .desc{color:var(--text-muted);font-size:11.5px;display:block;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{
+  display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:999px;
+  border:1px solid var(--border);color:var(--text-muted);vertical-align:1px;margin-left:6px;
+}
+.scroll{overflow-x:auto}
+
+/* ---------------------------------------------------------- markers */
+.markform{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.markform input[type=text]{flex:1;min-width:200px}
+.marklist{list-style:none;margin:0;padding:0;font-size:13px}
+.marklist li{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--grid)}
+.marklist li:last-child{border-bottom:none}
+.marklist .day{color:var(--text-muted);font-variant-numeric:tabular-nums;font-size:12px;min-width:80px}
+.marklist .x{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 6px;font-size:15px;line-height:1}
+.marklist .x:hover{color:var(--critical)}
+
+/* ---------------------------------------------------------- misc */
+details{margin-top:14px}
+summary{cursor:pointer;color:var(--text-secondary);font-size:12.5px;padding:4px 0}
+summary:hover{color:var(--text-primary)}
+.caveats{margin:0;padding-left:18px;color:var(--text-secondary);font-size:12.5px;line-height:1.7}
+footer{margin-top:26px;color:var(--text-muted);font-size:12px;line-height:1.7}
+code{font:12px var(--mono);background:color-mix(in srgb, var(--grid) 60%, transparent);padding:1px 5px;border-radius:4px}
+.empty{text-align:center;padding:44px 20px;color:var(--text-muted)}
+.empty h2{color:var(--text-primary);font-size:17px;margin:0 0 8px}
+.demobar{
+  display:flex;gap:10px;align-items:center;margin-bottom:16px;padding:10px 14px;
+  border:1px solid var(--border);border-left:3px solid var(--warning);
+  border-radius:8px;background:var(--surface);font-size:13px;color:var(--text-secondary);
+}
+.demobar b{color:var(--text-primary);font-weight:600}
+.toast{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:26px;z-index:50;
+  background:var(--text-primary);color:var(--plane);padding:9px 16px;border-radius:999px;
+  font-size:13px;opacity:0;transition:opacity .18s,bottom .18s;pointer-events:none;
+}
+.toast.show{opacity:1;bottom:34px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-right:5px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <h1>vantage</h1>
+      <span class="tag">who is looking at your GitHub</span>
+    </div>
+    <div class="controls">
+      <label class="sr" for="repo">Repository</label>
+      <select id="repo"><option value="">All repos</option></select>
+      <label class="sr" for="days">Time range</label>
+      <select id="days">
+        <option value="30" selected>30 days</option>
+        <option value="90">90 days</option>
+        <option value="365">1 year</option>
+      </select>
+      <button id="sync" class="primary">Sync now</button>
+    </div>
+  </header>
+
+  <main id="app"><div class="empty">Loading…</div></main>
+
+  <footer id="footer"></footer>
+</div>
+
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ====================================================================
+   state
+   ==================================================================== */
+var DATA = null;
+var SORT = { key: "views", dir: -1 };
+var els = {
+  app: document.getElementById("app"),
+  footer: document.getElementById("footer"),
+  repo: document.getElementById("repo"),
+  days: document.getElementById("days"),
+  sync: document.getElementById("sync"),
+  tip: document.getElementById("tip"),
+  toast: document.getElementById("toast")
+};
+
+/* ====================================================================
+   helpers
+   ==================================================================== */
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+function num(n){
+  n = n || 0;
+  if (n >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/,"") + "M";
+  if (n >= 10000) return (n/1000).toFixed(1).replace(/\.0$/,"") + "K";
+  return String(n);
+}
+function shortDay(iso){
+  var p = String(iso).split("-");
+  var M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return M[parseInt(p[1],10)-1] + " " + parseInt(p[2],10);
+}
+function longDay(iso){
+  var p = String(iso).split("-");
+  return shortDay(iso) + ", " + p[0];
+}
+function css(name){
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function toast(msg){
+  els.toast.textContent = msg;
+  els.toast.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function(){ els.toast.classList.remove("show"); }, 2600);
+}
+function el(tag, attrs, kids){
+  var n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (var k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+  (kids || []).forEach(function(c){ n.appendChild(c); });
+  return n;
+}
+/* A rounded "data end" on the growth axis only, square at the baseline. */
+function barPath(x, y, w, h, r, dir){
+  r = Math.min(r, w/2, h);
+  if (h <= 0.6) return "";
+  if (dir === "up"){
+    return "M"+x+","+(y+h)+" L"+x+","+(y+r)+" Q"+x+","+y+" "+(x+r)+","+y+
+           " L"+(x+w-r)+","+y+" Q"+(x+w)+","+y+" "+(x+w)+","+(y+r)+
+           " L"+(x+w)+","+(y+h)+" Z";
+  }
+  return "M"+x+","+y+" L"+(x+w-r)+","+y+" Q"+(x+w)+","+y+" "+(x+w)+","+(y+r)+
+         " L"+(x+w)+","+(y+h-r)+" Q"+(x+w)+","+(y+h)+" "+(x+w-r)+","+(y+h)+
+         " L"+x+","+(y+h)+" Z";
+}
+/* Axis ticks on clean numbers. The top tick must clear the data max, or the
+   tallest bar overflows the plot area. */
+function ticks(max, n){
+  if (!(max > 0)) return [0, 1];
+  var raw = max / n;
+  var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+  var step = null;
+  [1, 2, 2.5, 5, 10].forEach(function(m){
+    if (step === null && m * mag >= raw) step = m * mag;
+  });
+  if (!step) step = mag * 10;
+  if (step < 1) step = 1;   // every metric here is a count
+  var out = [0], v = 0, guard = 0;
+  while (out[out.length - 1] < max && ++guard < 500){
+    v += step;
+    out.push(Math.round(v * 1000) / 1000);
+  }
+  return out;
+}
+
+/* ====================================================================
+   signal ramp — ordinal: darker (light mode) = stronger evidence
+   ==================================================================== */
+var SIGNAL_LEVELS = [
+  { min: 0.90, v: "--sig-5", label: "Direct evidence" },
+  { min: 0.70, v: "--sig-4", label: "Strong hint" },
+  { min: 0.40, v: "--sig-3", label: "Worth a look" },
+  { min: 0.25, v: "--sig-2", label: "Ordinary discovery" },
+  { min: 0.00, v: "--sig-1", label: "Background noise" }
+];
+function signalLevel(weight){
+  for (var i = 0; i < SIGNAL_LEVELS.length; i++)
+    if (weight >= SIGNAL_LEVELS[i].min) return SIGNAL_LEVELS[i];
+  return SIGNAL_LEVELS[SIGNAL_LEVELS.length - 1];
+}
+
+/* ====================================================================
+   tooltip
+   ==================================================================== */
+function showTip(html, clientX, clientY){
+  els.tip.innerHTML = html;
+  els.tip.style.opacity = "1";
+  var r = els.tip.getBoundingClientRect();
+  var x = clientX + 14, y = clientY - r.height - 12;
+  if (x + r.width > window.innerWidth - 10) x = clientX - r.width - 14;
+  if (y < 8) y = clientY + 18;
+  els.tip.style.left = (x + window.scrollX) + "px";
+  els.tip.style.top  = (y + window.scrollY) + "px";
+}
+function hideTip(){ els.tip.style.opacity = "0"; }
+
+/* ====================================================================
+   timeline: views as columns, unique visitors as a line — one shared
+   axis (both are counts of the same kind, so no second scale)
+   ==================================================================== */
+function renderTimeline(host, data){
+  var series = data.timeline, events = data.events || [];
+  var W = host.clientWidth || 820, H = 268;
+  var m = { t: 18, r: 16, b: 30, l: 44 };
+  var iw = Math.max(80, W - m.l - m.r), ih = H - m.t - m.b;
+  var n = series.length;
+  var band = iw / n;
+  var maxV = Math.max(1, series.reduce(function(a,d){ return Math.max(a, d.c, d.u); }, 0));
+  var tk = ticks(maxV, 4);
+  var top = tk[tk.length - 1] || 1;
+  var y = function(v){ return m.t + ih - (v / top) * ih; };
+  var xc = function(i){ return m.l + band * i + band / 2; };
+
+  var kids = [];
+  // gridlines + y ticks
+  tk.forEach(function(t){
+    kids.push(el("line", { x1: m.l, x2: m.l + iw, y1: y(t), y2: y(t),
+      stroke: t === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    var lab = el("text", { x: m.l - 9, y: y(t) + 4, "text-anchor": "end",
+      fill: "var(--text-muted)", "font-size": 11 });
+    lab.textContent = num(t);
+    kids.push(lab);
+  });
+
+  // event markers, behind the data
+  var evByDay = {};
+  events.forEach(function(e){ (evByDay[e.day] = evByDay[e.day] || []).push(e); });
+  series.forEach(function(d, i){
+    if (!evByDay[d.day]) return;
+    kids.push(el("line", { x1: xc(i), x2: xc(i), y1: m.t - 6, y2: m.t + ih,
+      stroke: "var(--axis)", "stroke-width": 1 }));
+    kids.push(el("path", {
+      d: "M" + (xc(i)-4) + "," + (m.t-6) + " L" + (xc(i)+4) + "," + (m.t-6) +
+         " L" + xc(i) + "," + (m.t-1) + " Z",
+      fill: "var(--text-secondary)" }));
+  });
+
+  // columns: page views. 2px surface gap between neighbours, cap 24px.
+  var bw = Math.max(1.5, Math.min(24, band - 2));
+  series.forEach(function(d, i){
+    if (!d.c) return;
+    var h = ih - (y(d.c) - m.t);
+    kids.push(el("path", { d: barPath(xc(i) - bw/2, y(d.c), bw, h, 4, "up"),
+      fill: "var(--series-1)" }));
+  });
+
+  // line: unique visitors
+  var pts = series.map(function(d, i){ return [xc(i), y(d.u)]; });
+  if (pts.length){
+    kids.push(el("path", {
+      d: pts.map(function(p, i){ return (i ? "L" : "M") + p[0] + "," + p[1]; }).join(" "),
+      fill: "none", stroke: "var(--series-2)", "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  }
+
+  // selective direct label: the single busiest day only
+  var peak = series.reduce(function(b, d, i){
+    return (!b || d.u > b.d.u) ? { d: d, i: i } : b; }, null);
+  if (peak && peak.d.u > 0){
+    kids.push(el("circle", { cx: xc(peak.i), cy: y(peak.d.u), r: 4.5,
+      fill: "var(--series-2)", stroke: "var(--surface)", "stroke-width": 2 }));
+    // Sit above whichever series is taller here, so the label never lands on
+    // a column; keep it inside the plot, and give it a surface halo.
+    // Sit above the tallest mark anywhere in the chart, so the label can never
+    // land on a neighbouring column; a leader line keeps it tied to its dot.
+    var ly = Math.max(m.t + 10, y(maxV) - 12);
+    var anchor = "middle", lx = xc(peak.i);
+    if (lx < m.l + 42) { anchor = "start"; lx = m.l + 2; }
+    else if (lx > m.l + iw - 42) { anchor = "end"; lx = m.l + iw - 2; }
+    var dotTop = y(peak.d.u) - 7;
+    if (dotTop - ly > 10){
+      kids.push(el("line", { x1: xc(peak.i), x2: xc(peak.i), y1: ly + 4, y2: dotTop,
+        stroke: "var(--axis)", "stroke-width": 1 }));
+    }
+    var pl = el("text", { x: lx, y: ly, "text-anchor": anchor,
+      fill: "var(--text-primary)", "font-size": 11.5, "font-weight": 600,
+      stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" });
+    pl.textContent = peak.d.u + " visitor" + (peak.d.u === 1 ? "" : "s");
+    kids.push(pl);
+  }
+
+  // x labels: first, middle, last
+  [0, Math.floor(n/2), n-1].forEach(function(i, k){
+    if (i < 0 || i >= n) return;
+    var t = el("text", { x: xc(i), y: H - 8,
+      "text-anchor": k === 0 ? "start" : (k === 2 ? "end" : "middle"),
+      fill: "var(--text-muted)", "font-size": 11 });
+    t.textContent = shortDay(series[i].day);
+    kids.push(t);
+  });
+
+  // hover layer: crosshair + nearest-day tooltip
+  var cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--axis)",
+    "stroke-width": 1, opacity: 0 });
+  kids.push(cross);
+  var hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" });
+  kids.push(hit);
+
+  var svg = el("svg", { viewBox: "0 0 " + W + " " + H, height: H,
+    role: "img", "aria-label": "Daily page views and unique visitors" }, kids);
+  host.innerHTML = "";
+  host.appendChild(svg);
+
+  hit.addEventListener("mousemove", function(ev){
+    var box = svg.getBoundingClientRect();
+    var scale = W / box.width;
+    var px = (ev.clientX - box.left) * scale;
+    var i = Math.max(0, Math.min(n - 1, Math.floor((px - m.l) / band)));
+    var d = series[i];
+    cross.setAttribute("x1", xc(i)); cross.setAttribute("x2", xc(i));
+    cross.setAttribute("opacity", 1);
+    var evs = (evByDay[d.day] || []).map(function(e){
+      return "<div class='ev'>◆ " + esc(e.label) + "</div>"; }).join("");
+    showTip(
+      "<div class='d'>" + longDay(d.day) + "</div>" +
+      "<div class='row'><span class='key'><i class='swatch' style=\"display:inline-block;width:11px;height:11px;border-radius:3px;background:var(--series-1)\"></i>Page views</span><b>" + d.c + "</b></div>" +
+      "<div class='row'><span class='key'><i style=\"display:inline-block;width:14px;height:2px;border-radius:2px;background:var(--series-2)\"></i>Unique visitors</span><b>" + d.u + "</b></div>" +
+      evs, ev.clientX, ev.clientY);
+  });
+  hit.addEventListener("mouseleave", function(){
+    cross.setAttribute("opacity", 0); hideTip();
+  });
+}
+
+/* sparkline for the repo table — one series, so no legend needed */
+function sparkline(values, w, h){
+  w = w || 96; h = h || 26;
+  var max = Math.max.apply(null, values.concat([1]));
+  var n = values.length;
+  var x = function(i){ return n < 2 ? 0 : (i / (n - 1)) * w; };
+  var y = function(v){ return h - (v / max) * (h - 3) - 1.5; };
+  var d = values.map(function(v, i){ return (i ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1); }).join(" ");
+  var area = d + " L" + w + "," + h + " L0," + h + " Z";
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" aria-hidden="true">' +
+    '<path d="' + area + '" fill="var(--series-1)" opacity=".10"/>' +
+    '<path d="' + d + '" fill="none" stroke="var(--series-1)" stroke-width="2" ' +
+    'stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+
+/* ====================================================================
+   sections
+   ==================================================================== */
+function verdictCard(d){
+  var lv = d.verdict.level;
+  var word = { strong: "Strong signal", moderate: "Mixed signal",
+               weak: "No hiring signal", none: "No data" }[lv];
+  return '<div class="card" style="margin-bottom:16px">' +
+    '<div class="verdict">' +
+      '<span class="dot ' + lv + '"></span>' +
+      '<div class="body">' +
+        '<p class="q">Is anyone hiring looking at your work?</p>' +
+        '<p class="a">' + esc(d.verdict.text) + '</p>' +
+        '<p class="lvl">' + word + ' · scored from the referring domains GitHub reports, ' +
+        'which never name a person or a company.</p>' +
+      '</div>' +
+    '</div></div>';
+}
+
+function statsRow(d){
+  var s = d.summary;
+  function delta(v, noun){
+    if (!s.comparable)
+      return '<span class="delta">no earlier history to compare against yet</span>';
+    if (!v) return '<span class="delta">no change vs the 14 days before</span>';
+    var cls = v > 0 ? "up" : "down";
+    var sign = v > 0 ? "+" : "";
+    return '<span class="delta"><span class="' + cls + '">' + sign + v + '</span> ' +
+      esc(noun) + ' vs the 14 days before</span>';
+  }
+  var depth = Math.round(s.depth_score * 100);
+  var withTraffic = d.repos.filter(function(r){ return r.views > 0; }).length;
+  return '<div class="stats">' +
+    '<div class="stat hero"><div class="label">Unique visitors · last 14 days</div>' +
+      '<div class="value">' + num(s.visitors_14d) + '</div>' +
+      delta(s.visitors_delta, "visitors") + '</div>' +
+    '<div class="stat"><div class="label">Page views · last 14 days</div>' +
+      '<div class="value">' + num(s.views_14d) + '</div>' +
+      delta(s.views_delta, "views") + '</div>' +
+    '<div class="stat"><div class="label">Reading depth</div>' +
+      '<div class="value">' + depth + '%</div>' +
+      '<div class="meter"><i style="width:' + depth + '%"></i></div>' +
+      '<div class="foot">of page views were code, not the README</div></div>' +
+    '<div class="stat"><div class="label">Repos with traffic</div>' +
+      '<div class="value">' + withTraffic + '<span style="font-size:18px;color:var(--text-muted)"> / ' + d.repos.length + '</span></div>' +
+      '<div class="foot">over the last ' + d.window_days + ' days</div></div>' +
+  '</div>';
+}
+
+function timelineCard(d){
+  var spikes = d.spikes.length;
+  return '<div class="card" style="margin-bottom:16px">' +
+    '<h2>Daily traffic</h2>' +
+    '<p class="sub">' + d.window_days + ' days' +
+      (spikes ? ' · ' + spikes + (spikes === 1 ? ' day stands' : ' days stand') + ' out from your baseline' : '') +
+      (d.events.length ? ' · ◆ marks days you flagged' : '') + '</p>' +
+    '<div class="legend">' +
+      '<span class="item"><i class="swatch" style="background:var(--series-1)"></i>Page views</span>' +
+      '<span class="item"><i class="linekey" style="background:var(--series-2)"></i>Unique visitors</span>' +
+    '</div>' +
+    '<div class="chartbox" id="tl"></div>' +
+    '<details><summary>View as a table</summary>' + timelineTable(d) + '</details>' +
+  '</div>';
+}
+
+function timelineTable(d){
+  var rows = d.timeline.slice().reverse().filter(function(x){ return x.c || x.u; });
+  if (!rows.length) return '<p class="sub" style="margin-top:10px">No traffic recorded in this window.</p>';
+  return '<div class="scroll"><table style="margin-top:10px"><thead><tr>' +
+    '<th>Day</th><th class="num">Page views</th><th class="num">Unique visitors</th></tr></thead><tbody>' +
+    rows.map(function(x){
+      return '<tr><td>' + longDay(x.day) + '</td><td class="num">' + x.c +
+             '</td><td class="num">' + x.u + '</td></tr>';
+    }).join("") + '</tbody></table></div>';
+}
+
+function referrerCard(d){
+  var refs = d.referrers;
+  if (!refs.length){
+    return '<div class="card"><h2>Where they came from</h2>' +
+      '<p class="sub">GitHub\'s rolling 14-day top 10</p>' +
+      '<p style="color:var(--text-muted)">No referrers recorded. Traffic reached you directly — ' +
+      'a pasted link, a bookmark, or a browser that strips the referrer.</p></div>';
+  }
+  var max = Math.max.apply(null, refs.map(function(r){ return r.uniques || 0; }).concat([1]));
+  var used = {};
+  refs.forEach(function(r){ used[signalLevel(r.weight).label] = signalLevel(r.weight); });
+  var legend = SIGNAL_LEVELS.filter(function(l){ return used[l.label]; }).map(function(l){
+    return '<span class="item"><i class="swatch" style="background:var(' + l.v + ')"></i>' + l.label + '</span>';
+  }).join("");
+
+  var bars = refs.map(function(r){
+    var lv = signalLevel(r.weight);
+    var pct = Math.max(2, (r.uniques / max) * 100);
+    return '<div class="bar-row" data-tip="' + esc(r.why) + '" data-ref="' + esc(r.referrer) + '">' +
+      '<span class="name">' + esc(r.referrer) + '<small>' + esc(r.category_label) + '</small></span>' +
+      '<span class="bar-track"><span class="bar-fill" style="width:' + pct + '%;background:var(' + lv.v + ')"></span></span>' +
+      '<span class="val">' + r.uniques + '</span>' +
+    '</div>';
+  }).join("");
+
+  return '<div class="card"><h2>Where they came from</h2>' +
+    '<p class="sub">Unique visitors per referring domain · GitHub\'s rolling 14-day top 10</p>' +
+    '<div class="legend">' + legend + '</div>' +
+    '<div class="bars" id="refbars">' + bars + '</div>' +
+  '</div>';
+}
+
+function depthCard(d){
+  var kinds = d.path_kinds.filter(function(k){ return k.uniques > 0; });
+  if (!kinds.length){
+    return '<div class="card"><h2>How deeply they read</h2>' +
+      '<p class="sub">Which pages visitors opened</p>' +
+      '<p style="color:var(--text-muted)">No page data yet.</p></div>';
+  }
+  var DEEP = { source:1, browse:1, history:1, release:1 };
+  var max = Math.max.apply(null, kinds.map(function(k){ return k.uniques; }).concat([1]));
+  var bars = kinds.map(function(k){
+    var deep = DEEP[k.kind] === 1;
+    var colour = k.kind === "self" ? "var(--text-muted)" : (deep ? "var(--series-1)" : "var(--sig-2)");
+    var pct = Math.max(2, (k.uniques / max) * 100);
+    return '<div class="bar-row" data-tip="' + esc(k.why) + '">' +
+      '<span class="name">' + esc(k.label) + '<small>' +
+        (k.kind === "self" ? "excluded from depth" : (deep ? "counts as a deep read" : "surface view")) +
+      '</small></span>' +
+      '<span class="bar-track"><span class="bar-fill" style="width:' + pct + '%;background:' + colour + '"></span></span>' +
+      '<span class="val">' + k.uniques + '</span>' +
+    '</div>';
+  }).join("");
+  return '<div class="card"><h2>How deeply they read</h2>' +
+    '<p class="sub">Unique visitors per page type · GitHub\'s rolling 14-day top 10</p>' +
+    '<div class="legend">' +
+      '<span class="item"><i class="swatch" style="background:var(--series-1)"></i>Deep read — code, history, releases</span>' +
+      '<span class="item"><i class="swatch" style="background:var(--sig-2)"></i>Surface — landing page</span>' +
+      '<span class="item"><i class="swatch" style="background:var(--text-muted)"></i>Your own pages</span>' +
+    '</div>' +
+    '<div class="bars" id="kindbars">' + bars + '</div>' +
+  '</div>';
+}
+
+var COLS = [
+  { key: "repo",     label: "Repo",     num: false },
+  { key: "spark",    label: "Trend",    num: false, nosort: true },
+  { key: "views",    label: "Views",    num: true },
+  { key: "visitors", label: "Visitors", num: true },
+  { key: "clones",   label: "Clones",   num: true }
+];
+
+function repoCard(d){
+  var rows = d.repos.filter(function(r){ return r.views || r.clones; });
+  if (!rows.length){
+    return '<div class="card" style="margin-top:16px"><h2>By repo</h2>' +
+      '<p style="color:var(--text-muted)">Nothing recorded yet.</p></div>';
+  }
+  rows.sort(function(a, b){
+    var k = SORT.key;
+    var av = a[k], bv = b[k];
+    if (typeof av === "string") return av.localeCompare(bv) * SORT.dir;
+    return ((av || 0) - (bv || 0)) * SORT.dir;
+  });
+  var head = COLS.map(function(c){
+    var arrow = (!c.nosort && SORT.key === c.key)
+      ? ' <span class="arrow">' + (SORT.dir < 0 ? "▼" : "▲") + '</span>' : "";
+    return '<th class="' + (c.num ? "num " : "") + (c.nosort ? "" : "sortable") + '"' +
+      (c.nosort ? "" : ' data-sort="' + c.key + '"') + '>' + c.label + arrow + '</th>';
+  }).join("");
+  var body = rows.map(function(r){
+    var name = r.repo.split("/").pop();
+    return '<tr><td>' +
+        '<a href="' + esc(r.url || "#") + '" target="_blank" rel="noreferrer noopener">' + esc(name) + '</a>' +
+        (r.visibility === "private" ? '<span class="pill">private</span>' : '') +
+        (r.description ? '<span class="desc">' + esc(r.description) + '</span>' : '') +
+      '</td>' +
+      '<td>' + sparkline(r.spark) + '</td>' +
+      '<td class="num">' + r.views + '</td>' +
+      '<td class="num">' + r.visitors + '</td>' +
+      '<td class="num">' + r.clones + '</td></tr>';
+  }).join("");
+  return '<div class="card" style="margin-top:16px"><h2>By repo</h2>' +
+    '<p class="sub">Last ' + d.window_days + ' days · trend is daily page views. ' +
+    'Clone counts include CI and mirrors, so they run high.</p>' +
+    '<div class="scroll"><table id="repotable"><thead><tr>' + head + '</tr></thead>' +
+    '<tbody>' + body + '</tbody></table></div></div>';
+}
+
+function markersCard(d){
+  var list = d.events.length
+    ? d.events.map(function(e){
+        return '<li><span class="day">' + esc(e.day) + '</span><span>' + esc(e.label) + '</span>' +
+          '<button class="x" data-del="' + e.id + '" title="Remove" aria-label="Remove marker">×</button></li>';
+      }).join("")
+    : '<li style="color:var(--text-muted)">No markers yet. Add the day you applied somewhere, ' +
+      'then watch whether traffic follows.</li>';
+  var today = new Date().toISOString().slice(0, 10);
+  return '<div class="card" style="margin-top:16px"><h2>Mark a day</h2>' +
+    '<p class="sub">Applied somewhere? Sent your GitHub to a recruiter? Mark it, and the ' +
+    'timeline shows whether anything followed.</p>' +
+    '<div class="markform">' +
+      '<input type="date" id="mday" value="' + today + '" aria-label="Date">' +
+      '<input type="text" id="mlabel" placeholder="Applied to Acme — staff data engineer" aria-label="What happened">' +
+      '<button id="madd">Add marker</button>' +
+    '</div><ul class="marklist" id="marklist">' + list + '</ul></div>';
+}
+
+function footerHtml(d){
+  var c = d.coverage;
+  var hist = c.first_day
+    ? c.first_day + " → " + c.last_day + " (" + c.n_days + " days)"
+    : "none yet";
+  return '<details open><summary>What this can and cannot tell you</summary>' +
+    '<ul class="caveats">' + d.caveats.map(function(x){ return "<li>" + esc(x) + "</li>"; }).join("") +
+    '</ul></details>' +
+    '<p style="margin-top:14px">Local history ' + esc(hist) + ' · ' + c.n_syncs + ' syncs · ' +
+    'last sync ' + esc(c.last_sync || "never") + '<br>' +
+    'Database <code>' + esc(d.db_path || "") + '</code> · nothing leaves this machine except ' +
+    'the GitHub API calls themselves.</p>';
+}
+
+/* ====================================================================
+   render
+   ==================================================================== */
+function render(){
+  var d = DATA;
+  if (!d.coverage.first_day){
+    els.app.innerHTML = '<div class="card empty"><h2>No traffic history yet</h2>' +
+      '<p>Hit <b>Sync now</b>, or run <code>vantage sync</code>. GitHub only keeps ' +
+      '14 days — every sync from here on adds to a history it would otherwise throw away.</p></div>';
+    els.footer.innerHTML = "";
+    return;
+  }
+  var banner = d.is_demo
+    ? '<div class="demobar"><b>Demo data.</b> These repos, visitors and referrers ' +
+      'are generated, not real. Run <code>vantage sync</code> to see your own.</div>'
+    : '';
+  els.app.innerHTML = banner +
+    verdictCard(d) + statsRow(d) + timelineCard(d) +
+    '<div class="grid cols-2">' + referrerCard(d) + depthCard(d) + '</div>' +
+    repoCard(d) + markersCard(d);
+  els.footer.innerHTML = footerHtml(d);
+  renderTimeline(document.getElementById("tl"), d);
+  wire();
+}
+
+function wire(){
+  // sortable repo table
+  var table = document.getElementById("repotable");
+  if (table) table.querySelectorAll("th[data-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var k = th.getAttribute("data-sort");
+      if (SORT.key === k) SORT.dir = -SORT.dir;
+      else { SORT.key = k; SORT.dir = (k === "repo") ? 1 : -1; }
+      render();
+    });
+  });
+  // bar tooltips
+  document.querySelectorAll(".bar-row[data-tip]").forEach(function(row){
+    row.addEventListener("mousemove", function(ev){
+      var name = row.querySelector(".name").firstChild.textContent;
+      showTip("<div class='d'>" + esc(name) + "</div>" +
+              esc(row.getAttribute("data-tip")), ev.clientX, ev.clientY);
+    });
+    row.addEventListener("mouseleave", hideTip);
+  });
+  // markers
+  var add = document.getElementById("madd");
+  if (add) add.addEventListener("click", function(){
+    var label = document.getElementById("mlabel").value.trim();
+    var day = document.getElementById("mday").value;
+    if (!label) { toast("Give the marker a label"); return; }
+    post("/api/note", { label: label, day: day }).then(function(){
+      toast("Marker added"); load();
+    });
+  });
+  document.querySelectorAll("[data-del]").forEach(function(b){
+    b.addEventListener("click", function(){
+      post("/api/note/delete", { id: parseInt(b.getAttribute("data-del"), 10) })
+        .then(function(){ toast("Marker removed"); load(); });
+    });
+  });
+}
+
+/* ====================================================================
+   io
+   ==================================================================== */
+function post(path, body){
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Vantage-Local": "1" },
+    body: JSON.stringify(body || {})
+  }).then(function(r){ return r.json(); });
+}
+
+function load(){
+  var q = "?days=" + encodeURIComponent(els.days.value) +
+          (els.repo.value ? "&repo=" + encodeURIComponent(els.repo.value) : "");
+  return fetch("/api/data" + q).then(function(r){ return r.json(); }).then(function(d){
+    DATA = d;
+    fillRepoFilter(d);
+    render();
+  }).catch(function(e){
+    els.app.innerHTML = '<div class="card empty"><h2>Could not load data</h2><p>' +
+      esc(e.message) + '</p></div>';
+  });
+}
+
+function fillRepoFilter(d){
+  if (els.repo.dataset.filled === "1") return;
+  var names = d.repos.map(function(r){ return r.repo; }).sort();
+  names.forEach(function(nm){
+    var o = document.createElement("option");
+    o.value = nm; o.textContent = nm.split("/").pop();
+    els.repo.appendChild(o);
+  });
+  els.repo.dataset.filled = "1";
+}
+
+els.days.addEventListener("change", load);
+els.repo.addEventListener("change", load);
+els.sync.addEventListener("click", function(){
+  els.sync.disabled = true;
+  els.sync.innerHTML = '<span class="spin"></span>Syncing…';
+  post("/api/sync", {}).then(function(r){
+    els.sync.disabled = false;
+    els.sync.textContent = "Sync now";
+    if (r.error) { toast(r.error); return; }
+    toast("Synced " + r.ok + " repos in " + r.seconds + "s");
+    load();
+  }).catch(function(){
+    els.sync.disabled = false;
+    els.sync.textContent = "Sync now";
+    toast("Sync failed");
+  });
+});
+
+var rt;
+window.addEventListener("resize", function(){
+  clearTimeout(rt);
+  rt = setTimeout(function(){
+    var host = document.getElementById("tl");
+    if (host && DATA) renderTimeline(host, DATA);
+  }, 140);
+});
+
+load();
+</script>
+</body>
+</html>

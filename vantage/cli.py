@@ -8,7 +8,7 @@ import sys
 import time
 import webbrowser
 
-from . import __version__, analyze, gh, report, store
+from . import __version__, analyze, demo, gh, report, store
 
 
 def _eprint(*a):
@@ -140,6 +140,25 @@ def cmd_note(args, conn):
     return 0
 
 
+def cmd_demo(args, conn):
+    """Seed a throwaway database with synthetic traffic and open it.
+
+    Two jobs: let someone try the dashboard before they have 14 days of their
+    own history, and let screenshots exist without publishing real repo names.
+    """
+    n = demo.seed(conn, days=args.days)
+    _eprint("seeded %d demo repos into %s" % (n, args.db))
+    if args.no_serve:
+        rep = build_parser().parse_args(["report"])
+        rep.db = args.db
+        rep.color = args.color
+        return cmd_report(rep, conn)
+    from . import web
+    conn.close()
+    return web.serve(port=args.port, host="127.0.0.1", days=90,
+                     open_browser=not args.no_open, db=args.db)
+
+
 def cmd_repos(args, conn):
     rows = store.repos(conn)
     if not rows:
@@ -224,7 +243,7 @@ def build_parser():
     v = sub.add_parser("serve", parents=[common], help="launch the local dashboard")
     v.add_argument("--port", type=int, default=7373)
     v.add_argument("--host", default="127.0.0.1")
-    v.add_argument("--days", type=int, default=90)
+    v.add_argument("--days", type=int, default=30)
     v.add_argument("--no-open", action="store_true", help="don't open a browser")
     v.set_defaults(func=cmd_serve)
 
@@ -238,6 +257,15 @@ def build_parser():
     n.add_argument("--list", action="store_true", help="list markers")
     n.add_argument("--remove", type=int, metavar="ID", help="delete a marker")
     n.set_defaults(func=cmd_note)
+
+    dm = sub.add_parser("demo", parents=[common],
+                        help="seed synthetic data and open the dashboard")
+    dm.add_argument("--days", type=int, default=120)
+    dm.add_argument("--port", type=int, default=7373)
+    dm.add_argument("--no-open", action="store_true")
+    dm.add_argument("--no-serve", action="store_true",
+                    help="print the terminal report instead of serving")
+    dm.set_defaults(func=cmd_demo)
 
     rp = sub.add_parser("repos", parents=[common], help="list tracked repos and any sync errors")
     rp.set_defaults(func=cmd_repos)
@@ -256,7 +284,9 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
-    db = args.db or store.default_path()
+    default_db = (os.path.join(os.path.dirname(store.default_path()), "demo.db")
+                  if args.cmd == "demo" else store.default_path())
+    db = args.db or default_db
     args.db = db
     conn = store.connect(db)
     try:

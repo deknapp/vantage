@@ -20,7 +20,11 @@ $ vantage
 
   ●  Yes - 3 visits came from boards.greenhouse.io, which is a hiring platform.
 
-  82 visitors  -39   152 views  -59   786 clones
+  163 views  -16   53 unique visitors  -6   780 clones
+
+  Today · 2026-09-08
+    leafwise     4 views · 3 unique visitors
+    tide-gauge   4 views · 2 unique visitors
 ```
 
 ## Why
@@ -63,6 +67,7 @@ ln -s "$PWD/bin/vantage" /usr/local/bin/vantage # or put it on PATH
 
 ```bash
 vantage                 # sync, then print the report — the one you'll type
+vantage today           # which repos were viewed today, and the week around it
 vantage sync            # fetch only
 vantage report          # print only
 vantage serve           # open the dashboard at localhost:7373
@@ -92,6 +97,56 @@ Run it on a schedule so history never has a hole in it:
 # crontab -e  — every morning at 9
 0 9 * * * /usr/local/bin/vantage sync --quiet
 ```
+
+## Views, visitors, and the difference
+
+Three numbers get called "visitors" in traffic tools and they are not the same
+number. vantage names each one and never substitutes one for another:
+
+| | What it counts | Where it comes from |
+|---|---|---|
+| **Page views** | Every page load, including repeats. | Summed from the day series. |
+| **Unique visitors** | People, de-duplicated across the whole 14 days, per repo. | GitHub's own window figure, stored verbatim. |
+| **Visitor-days** | Daily uniques added up — someone who came back on three days counts three times. | Summed from the day series. |
+
+Only the middle one is close to a headcount, and it is the one the report leads
+with. It cannot be computed from the daily numbers — GitHub calculates it over
+the whole fortnight and returns it alongside the day series, so vantage keeps it
+as sent. The other two are useful and are labelled as what they are.
+
+Two honest limits on even the good number: it is summed across repos, so one
+person who reads three of your repos counts three times (GitHub never exposes a
+cross-repo de-duplicated figure), and it only exists for GitHub's rolling 14
+days, so there is no 90-day equivalent.
+
+## Which repos were read today
+
+`vantage today` answers the small question you actually ask several times a day,
+and it syncs first so the answer is not stale:
+
+```console
+$ vantage today
+
+  Today · 2026-09-08 · last sync 2026-09-08 09:12:04
+
+    chilecule     6 views · 2 unique visitors
+    polarswim     1 view  · 1 unique visitor
+
+  Views per day, by repo  ·  views (unique visitors that day)
+
+  repo             Wed 02  Thu 03  Fri 04  Sat 05  Sun 06  Mon 07   today
+  chilecule            ·       ·   6 (2)   4 (1)   1 (1)   1 (1)   6 (2)
+  polarswim        3 (1)       ·   5 (1)   3 (1)   1 (1)   1 (1)   1 (1)
+  taper                ·       ·   3 (1)       ·   1 (1)       ·       ·
+  ─────────────────────────────────────────────────────────────────────
+  all repos        3 (1)       ·  14 (4)   9 (4)   5 (5)   7 (5)   7 (3)
+```
+
+A `·` means nobody. An empty day is stated rather than left blank, and so is a
+day that has not been synced — GitHub counts days in UTC and lags a few hours,
+so a quiet morning is not yet evidence of a quiet day.
+
+The same grid, and a Today card, are the first two panels on the dashboard.
 
 ## How the signal is scored
 
@@ -134,9 +189,12 @@ tool:
   workflow clicked; it is not proof, and it never names them.
 - **History starts when you start.** Days before your first sync are gone. The
   chart fills in from here.
-- **Daily unique visitors de-duplicate within a day, not across days,** so a
-  30-day total counts a returning visitor more than once. Treat window totals as
-  a shape, not a headcount.
+- **Unique visitors are per repo, not per person across your account.** One
+  person who reads three of your repos is three uniques in the headline. It is
+  an upper bound; GitHub publishes no cross-repo de-duplicated count.
+- **Only the 14-day window has a real unique count.** Anything longer can only
+  be visitor-days — daily uniques summed, which counts a returning visitor once
+  per day they came back. The report says which of the two it is showing.
 - **Referrers and paths are a rolling 14-day top ten,** not a log, and not
   per-day. vantage keeps every snapshot, which is how it can tell you when a
   domain *first* appeared, but it cannot rebuild the days in between.
@@ -184,7 +242,9 @@ python3 -m unittest discover -s tests -v
 ```
 
 Covers domain classification and its boundary cases, the storage semantics that
-make re-syncing safe, and the aggregation both front-ends read.
+make re-syncing safe, the aggregation both front-ends read, and — pinned
+deliberately — that a visitor-day is never printed under the word "visitors",
+and that a day with no traffic says so instead of rendering as nothing.
 
 ## License
 

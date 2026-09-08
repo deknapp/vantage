@@ -102,6 +102,34 @@ def cmd_report(args, conn):
     return 0
 
 
+def cmd_today(args, conn):
+    """Just today, and the days either side of it, per repo.
+
+    `vantage report` answers "is anyone evaluating me"; this answers the much
+    smaller question people actually ask several times a day - did anything
+    happen, and to what. Syncs first unless told not to, because a stale answer
+    to "today" is worse than no answer."""
+    if not args.no_sync:
+        sync_args = build_parser().parse_args(["sync", "--quiet"])
+        sync_args.db = args.db
+        sync_args.color = args.color
+        rc = cmd_sync(sync_args, conn)
+        if rc != 0:
+            _eprint("(sync failed - showing what is already stored)")
+
+    data = analyze.build(conn, days=max(args.days, 14))
+    data["recent"] = analyze.recent_grid(conn, days=args.days)
+    if args.json:
+        print(json.dumps({"today": data["today"], "recent": data["recent"]}, indent=2))
+        return 0
+    if not data["coverage"]["first_day"]:
+        _eprint("No data yet. Run `vantage sync` first.")
+        return 1
+    ink = report.Ink(report.use_colour(None if args.color is None else args.color))
+    print(report.render_today(data, ink))
+    return 0
+
+
 # ----------------------------------------------------------------- serve
 
 def cmd_serve(args, conn):
@@ -239,6 +267,15 @@ def build_parser():
     r.add_argument("--top", type=int, default=10)
     r.add_argument("--json", action="store_true", help="emit the raw payload")
     r.set_defaults(func=cmd_report)
+
+    td = sub.add_parser("today", parents=[common],
+                        help="which repos were viewed today, and on the days around it")
+    td.add_argument("--days", type=int, default=7,
+                    help="how many days of columns to show (default 7)")
+    td.add_argument("--no-sync", action="store_true",
+                    help="read the stored data without fetching first")
+    td.add_argument("--json", action="store_true")
+    td.set_defaults(func=cmd_today)
 
     v = sub.add_parser("serve", parents=[common], help="launch the local dashboard")
     v.add_argument("--port", type=int, default=7373)

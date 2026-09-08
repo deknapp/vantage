@@ -71,6 +71,125 @@ def _bar(frac, width=18, filled="█", empty="·"):
     return filled * n + empty * (width - n)
 
 
+def _plural(n, one, many=None):
+    return one if n == 1 else (many or one + "s")
+
+
+def _weekday(day):
+    y, m, d = (int(x) for x in day.split("-"))
+    return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][
+        __import__("datetime").date(y, m, d).weekday()]
+
+
+def _today_section(A, ink, data, rule, w):
+    """The first thing anyone actually wants to know: did anything happen today,
+    and to which repo. Says so explicitly when the answer is no - a silent
+    section reads as a missing feature rather than as an empty day."""
+    t = data["today"]
+    A("")
+    A(rule)
+    head = "  " + ink.bold("Today") + ink.dim("  ·  " + t["day"])
+    if t["last_sync"]:
+        head += ink.dim("  ·  last sync " + t["last_sync"].replace("T", " "))
+    A(head)
+    A("")
+
+    if not t["synced_today"]:
+        A("  " + ink.amber("!") + "  Not synced today - GitHub has not been asked yet.")
+        A(ink.dim("     Run `vantage sync` for today's numbers."))
+        return
+
+    if not t["repos"]:
+        A("  " + ink.grey("○") + "  No repo has been viewed today.")
+        A(ink.dim("     GitHub counts days in UTC and lags a few hours, so today's"))
+        A(ink.dim("     row keeps filling in - re-sync later before reading much"))
+        A(ink.dim("     into a quiet morning."))
+        return
+
+    hi = max(r["views"] for r in t["repos"]) or 1
+    for r in t["repos"][:12]:
+        A("  %s %s %s %s" % (
+            _pad(r["repo"].split("/")[-1], 24),
+            ink.green(_bar(r["views"] / float(hi), 12)),
+            ink.bold("%4d" % r["views"]) + ink.dim(" " + _plural(r["views"], "view")),
+            ink.dim("· %d unique %s" % (r["uniques"],
+                                        _plural(r["uniques"], "visitor"))),
+        ))
+    A("")
+    A(ink.dim("     %d %s from %d unique %s across %d %s%s."
+              % (t["views"], _plural(t["views"], "view"),
+                 t["visitor_days"], _plural(t["visitor_days"], "visitor"),
+                 t["n_repos"], _plural(t["n_repos"], "repo"),
+                 (" · %d clones" % t["clones"]) if t["clones"] else "")))
+    A(ink.dim("     Unique is per repo per day: the same person on two repos"))
+    A(ink.dim("     counts twice."))
+
+
+def _grid_section(A, ink, data, rule, w):
+    """Views per day per repo. One column per day, one row per repo, so
+    "which repos were read on Thursday" is a glance rather than an inference
+    from a bucketed sparkline."""
+    grid = data["recent"]
+    rows = grid["rows"]
+    if not rows:
+        return
+    name_w = 20
+    cell_w = 8
+    n_days = max(3, min(len(grid["days"]), (w - 2 - name_w) // cell_w))
+    days = grid["days"][-n_days:]
+    offset = len(grid["days"]) - n_days
+
+    A("")
+    A(rule)
+    A("  " + ink.bold("Views per day, by repo")
+      + ink.dim("  ·  views (unique visitors that day)"))
+    A("")
+
+    head = "  " + _pad("repo", name_w)
+    for i, d in enumerate(days):
+        lab = "today" if i == len(days) - 1 else "%s %s" % (_weekday(d), d[8:])
+        head += _pad(lab, cell_w, ">")
+    A(ink.dim(head))
+
+    def cells_for(cells):
+        line = ""
+        for c in cells[offset:]:
+            if not c["c"]:
+                line += _pad("·", cell_w, ">")
+            else:
+                line += _pad("%d (%d)" % (c["c"], c["u"]), cell_w, ">")
+        return line
+
+    for r in rows[:12]:
+        name = _pad(r["repo"].split("/")[-1], name_w)
+        body = cells_for(r["cells"])
+        line = "  " + (ink.bold(name) if r["today_views"] else name)
+        A(line + (ink.blue(body) if r["today_views"] else body))
+
+    A("  " + ink.dim("─" * min(w - 2, name_w + cell_w * n_days)))
+    A("  " + ink.dim(_pad("all repos", name_w)) + ink.dim(cells_for(grid["totals"])))
+    A("")
+    A(ink.dim("     · = nobody · today's column is still filling in (UTC, lagged)"))
+
+
+def render_today(data, ink=None):
+    """The `vantage today` view: what happened today, and the days around it."""
+    ink = ink or Ink(use_colour())
+    cols = shutil.get_terminal_size((100, 24)).columns
+    w = max(60, min(cols, 100))
+    out = []
+    A = out.append
+    rule = ink.dim("─" * w)
+    A("")
+    A(ink.bold("  vantage") + ink.dim("  ·  today"))
+    _today_section(A, ink, data, rule, w)
+    _grid_section(A, ink, data, rule, w)
+    A("")
+    A(ink.dim("  `vantage report` for referrers, reading depth and the verdict."))
+    A("")
+    return "\n".join(out)
+
+
 def render(data, ink=None, top=10):
     ink = ink or Ink(use_colour())
     cols = shutil.get_terminal_size((100, 24)).columns
@@ -98,16 +217,43 @@ def render(data, ink=None, top=10):
     # A delta is only meaningful once we hold data for the earlier window;
     # before that "+25" would just be measuring when syncing started.
     cmp_ok = s.get("comparable")
+    uniq = data.get("uniques")
+    # Two different unique counts exist. GitHub's window figure is the honest
+    # headcount-ish one; summed daily uniques (visitor-days) is what a day
+    # chart can show. Label whichever we print for exactly what it is, and
+    # never call either of them "visitors" unqualified.
+    if uniq:
+        people = _stat(ink, "unique visitors", uniq["visitors"], uniq["delta"])
+    else:
+        people = _stat(ink, "visitor-days", s["visitor_days_14d"],
+                       s["visitors_delta"] if cmp_ok else None)
     A("  %s   %s   %s" % (
-        _stat(ink, "visitors", s["visitors_14d"],
-              s["visitors_delta"] if cmp_ok else None),
         _stat(ink, "views", s["views_14d"],
               s["views_delta"] if cmp_ok else None),
+        people,
         _stat(ink, "clones", s["clones_window"], None),
     ))
     A(ink.dim("     last 14 days%s        clones over %dd"
               % (", vs the 14 before" if cmp_ok else " (no earlier history yet)",
                  data["window_days"])))
+    A("")
+    if uniq:
+        A(ink.dim("     unique visitors = GitHub's own count, de-duplicated across the"))
+        A(ink.dim("     whole 14 days, added up per repo - so one person who read three"))
+        A(ink.dim("     of your repos counts three times, but a daily regular counts once."))
+        A(ink.dim("     Summing the per-day uniques instead gives %d visitor-days."
+                  % s["visitor_days_14d"]))
+        if uniq.get("stale_days"):
+            A(ink.dim("     (from the sync on %s, %d %s ago)"
+                      % (uniq["snapshot"], uniq["stale_days"],
+                         _plural(uniq["stale_days"], "day"))))
+    else:
+        A(ink.dim("     visitor-days = per-day unique visitors summed, so someone who"))
+        A(ink.dim("     came back on three days counts three times. Run `vantage sync`"))
+        A(ink.dim("     to start recording GitHub's de-duplicated 14-day visitor count."))
+
+    _today_section(A, ink, data, rule, w)
+    _grid_section(A, ink, data, rule, w)
 
     # --- timeline -------------------------------------------------------
     tl = data["timeline"]
@@ -174,16 +320,32 @@ def render(data, ink=None, top=10):
         A(rule)
         A("  " + ink.bold("By repo") + ink.dim("  (%d days)" % data["window_days"]))
         A("")
-        A("  " + ink.dim("%s %s %s %s %s" % (
-            _pad("repo", 24), _pad("trend", 20),
-            _pad("views", 7, ">"), _pad("visits", 7, ">"),
-            _pad("clones", 7, ">"))))
+        # "visits" used to head a column of summed daily uniques, which is not
+        # visits and not visitors. Split into the two things it was conflating:
+        # views over several spans, and GitHub's de-duplicated 14-day people.
+        A("  " + ink.dim("%s %s %s %s %s %s %s%s" % (
+            _pad("repo", 20), _pad("trend", 16),
+            _pad("today", 6, ">"), _pad("7d", 6, ">"),
+            _pad("14d", 6, ">"), _pad("%dd" % data["window_days"], 6, ">"),
+            _pad("people", 7, ">"), _pad("clones", 7, ">"))))
         for r in rows[:top]:
-            A("  %s %s %s" % (
-                _pad(r["repo"].split("/")[-1], 24),
-                ink.blue(_pad(spark(r["spark"], 20), 20)),
-                ink.bold("%7d" % r["views"]) + "%7d%7d" % (r["visitors"], r["clones"]),
+            name = _pad(r["repo"].split("/")[-1], 20)
+            people = r.get("unique_visitors_14d")
+            A("  %s %s%s%s%s%s%s" % (
+                ink.bold(name) if r.get("today_views") else name,
+                ink.blue(_pad(spark(r["spark"], 16), 16)),
+                (ink.green(_pad(str(r["today_views"]), 6, ">"))
+                 if r.get("today_views") else ink.grey(_pad("·", 6, ">"))),
+                _pad(str(r.get("views_7d", 0)), 6, ">"),
+                _pad(str(r.get("views_14d", 0)), 6, ">"),
+                ink.bold(_pad(str(r["views"]), 6, ">")),
+                _pad("—" if people is None else str(people), 7, ">")
+                + _pad(str(r["clones"]), 7, ">"),
             ))
+        A("")
+        A(ink.dim("     today/7d/14d/%dd are page views · people = GitHub's unique"
+                  % data["window_days"]))
+        A(ink.dim("     visitors over its own rolling 14 days, de-duplicated"))
 
     # --- events ----------------------------------------------------------
     ev = data["events"][:5]

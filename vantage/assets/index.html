@@ -521,9 +521,22 @@ function statsRow(d){
   var depth = Math.round(s.depth_score * 100);
   var withTraffic = d.repos.filter(function(r){ return r.views > 0; }).length;
   return '<div class="stats">' +
-    '<div class="stat hero"><div class="label">Unique visitors · last 14 days</div>' +
-      '<div class="value">' + num(s.visitors_14d) + '</div>' +
-      delta(s.visitors_delta, "visitors") + '</div>' +
+    (s.unique_visitors_14d != null
+      ? '<div class="stat hero"><div class="label">Unique visitors · last 14 days</div>' +
+          '<div class="value">' + num(s.unique_visitors_14d) + '</div>' +
+          (s.unique_visitors_delta != null
+            ? delta(s.unique_visitors_delta, "visitors")
+            : '<span class="delta">no earlier fortnight to compare with yet</span>') +
+          '<div class="foot">GitHub\'s own count, de-duplicated across the whole ' +
+          '14 days, added up per repo. Summing the per-day uniques instead ' +
+          'gives ' + num(s.visitor_days_14d) + ' visitor-days, which counts a ' +
+          'returning visitor once per day.</div></div>'
+      : '<div class="stat hero"><div class="label">Visitor-days · last 14 days</div>' +
+          '<div class="value">' + num(s.visitor_days_14d) + '</div>' +
+          delta(s.visitors_delta, "visitor-days") +
+          '<div class="foot">Per-day unique visitors summed, so someone who came ' +
+          'back on three days counts three times. Sync to record GitHub\'s ' +
+          'de-duplicated 14-day visitor count.</div></div>') +
     '<div class="stat"><div class="label">Page views · last 14 days</div>' +
       '<div class="value">' + num(s.views_14d) + '</div>' +
       delta(s.views_delta, "views") + '</div>' +
@@ -537,6 +550,67 @@ function statsRow(d){
   '</div>';
 }
 
+function todayCard(d){
+  // "Did anyone look at anything today, and at what" - the question the
+  // 14-day and 90-day rollups above cannot answer at all.
+  var t = d.today;
+  var body;
+  if (!t.synced_today){
+    body = '<p class="sub">Not synced today, so GitHub has not been asked yet. ' +
+      'Hit Sync for today\'s numbers.</p>';
+  } else if (!t.repos.length){
+    body = '<p class="sub">No repo has been viewed today. GitHub counts days in ' +
+      'UTC and lags a few hours, so today\'s row keeps filling in - re-sync ' +
+      'later before reading much into a quiet morning.</p>';
+  } else {
+    var hi = Math.max.apply(null, t.repos.map(function(r){ return r.views; })) || 1;
+    body = '<div class="scroll"><table><thead><tr><th>Repo</th>' +
+      '<th class="num">Views</th><th class="num">Unique visitors</th>' +
+      '<th style="width:40%"></th></tr></thead><tbody>' +
+      t.repos.map(function(r){
+        return '<tr><td>' + esc(r.repo.split("/").pop()) + '</td>' +
+          '<td class="num">' + r.views + '</td>' +
+          '<td class="num">' + r.uniques + '</td>' +
+          '<td><div class="meter"><i style="width:' +
+            Math.round(r.views / hi * 100) + '%"></i></div></td></tr>';
+      }).join("") + '</tbody></table></div>' +
+      '<p class="sub" style="margin-top:10px">' + t.views + ' views from ' +
+        t.visitor_days + ' unique visitors across ' + t.n_repos +
+        (t.n_repos === 1 ? ' repo' : ' repos') +
+        '. Unique is per repo per day: the same person on two repos counts twice.</p>';
+  }
+  return '<div class="card" style="margin-bottom:16px"><h2>Today · ' +
+    esc(t.day) + '</h2>' + body + '</div>';
+}
+
+function gridCard(d){
+  // One row per repo, one column per day. A sparkline buckets days together;
+  // this does not, so "which repos were read on Thursday" is readable.
+  var g = d.recent;
+  if (!g || !g.rows.length) return "";
+  var head = '<th>Repo</th>' + g.days.map(function(day, i){
+    var lab = (i === g.days.length - 1) ? "today" : day.slice(5);
+    return '<th class="num">' + esc(lab) + '</th>';
+  }).join("");
+  function cells(list){
+    return list.map(function(c){
+      if (!c.c) return '<td class="num" style="color:var(--text-muted)">·</td>';
+      return '<td class="num">' + c.c +
+        '<span style="color:var(--text-muted)"> (' + c.u + ')</span></td>';
+    }).join("");
+  }
+  var body = g.rows.map(function(r){
+    return '<tr><td>' + esc(r.repo.split("/").pop()) + '</td>' + cells(r.cells) + '</tr>';
+  }).join("");
+  var foot = '<tr style="border-top:2px solid var(--border)"><td><b>All repos</b></td>' +
+    cells(g.totals) + '</tr>';
+  return '<div class="card" style="margin-bottom:16px"><h2>Views per day, by repo</h2>' +
+    '<p class="sub">Page views, with unique visitors that day in brackets. ' +
+    '· means nobody. Today\'s column is still filling in.</p>' +
+    '<div class="scroll"><table><thead><tr>' + head + '</tr></thead><tbody>' +
+    body + foot + '</tbody></table></div></div>';
+}
+
 function timelineCard(d){
   var spikes = d.spikes.length;
   return '<div class="card" style="margin-bottom:16px">' +
@@ -546,7 +620,7 @@ function timelineCard(d){
       (d.events.length ? ' · ◆ marks days you flagged' : '') + '</p>' +
     '<div class="legend">' +
       '<span class="item"><i class="swatch" style="background:var(--series-1)"></i>Page views</span>' +
-      '<span class="item"><i class="linekey" style="background:var(--series-2)"></i>Unique visitors</span>' +
+      '<span class="item"><i class="linekey" style="background:var(--series-2)"></i>Unique visitors that day</span>' +
     '</div>' +
     '<div class="chartbox" id="tl"></div>' +
     '<details><summary>View as a table</summary>' + timelineTable(d) + '</details>' +
@@ -557,7 +631,7 @@ function timelineTable(d){
   var rows = d.timeline.slice().reverse().filter(function(x){ return x.c || x.u; });
   if (!rows.length) return '<p class="sub" style="margin-top:10px">No traffic recorded in this window.</p>';
   return '<div class="scroll"><table style="margin-top:10px"><thead><tr>' +
-    '<th>Day</th><th class="num">Page views</th><th class="num">Unique visitors</th></tr></thead><tbody>' +
+    '<th>Day</th><th class="num">Page views</th><th class="num">Unique visitors that day</th></tr></thead><tbody>' +
     rows.map(function(x){
       return '<tr><td>' + longDay(x.day) + '</td><td class="num">' + x.c +
              '</td><td class="num">' + x.u + '</td></tr>';
@@ -628,12 +702,18 @@ function depthCard(d){
   '</div>';
 }
 
+// "Visitors" here used to be summed daily uniques, which is neither visits
+// nor visitors. Split into what it was conflating: views over several spans,
+// and GitHub's de-duplicated 14-day people.
 var COLS = [
-  { key: "repo",     label: "Repo",     num: false },
-  { key: "spark",    label: "Trend",    num: false, nosort: true },
-  { key: "views",    label: "Views",    num: true },
-  { key: "visitors", label: "Visitors", num: true },
-  { key: "clones",   label: "Clones",   num: true }
+  { key: "repo",        label: "Repo",   num: false },
+  { key: "spark",       label: "Trend",  num: false, nosort: true },
+  { key: "today_views", label: "Today",  num: true },
+  { key: "views_7d",    label: "7d",     num: true },
+  { key: "views_14d",   label: "14d",    num: true },
+  { key: "views",       label: "Views",  num: true },
+  { key: "unique_visitors_14d", label: "People", num: true },
+  { key: "clones",      label: "Clones", num: true }
 ];
 
 function repoCard(d){
@@ -662,12 +742,21 @@ function repoCard(d){
         (r.description ? '<span class="desc">' + esc(r.description) + '</span>' : '') +
       '</td>' +
       '<td>' + sparkline(r.spark) + '</td>' +
+      '<td class="num">' + (r.today_views
+        ? '<b>' + r.today_views + '</b>'
+        : '<span style="color:var(--text-muted)">·</span>') + '</td>' +
+      '<td class="num">' + (r.views_7d || 0) + '</td>' +
+      '<td class="num">' + (r.views_14d || 0) + '</td>' +
       '<td class="num">' + r.views + '</td>' +
-      '<td class="num">' + r.visitors + '</td>' +
+      '<td class="num">' + (r.unique_visitors_14d == null
+        ? '<span style="color:var(--text-muted)">—</span>'
+        : r.unique_visitors_14d) + '</td>' +
       '<td class="num">' + r.clones + '</td></tr>';
   }).join("");
   return '<div class="card" style="margin-top:16px"><h2>By repo</h2>' +
-    '<p class="sub">Last ' + d.window_days + ' days · trend is daily page views. ' +
+    '<p class="sub">Today / 7d / 14d / Views are page views over those spans; ' +
+    'Views covers the full ' + d.window_days + ' days. People is GitHub\'s ' +
+    'unique visitors over its own rolling 14 days, de-duplicated. ' +
     'Clone counts include CI and mirrors, so they run high.</p>' +
     '<div class="scroll"><table id="repotable"><thead><tr>' + head + '</tr></thead>' +
     '<tbody>' + body + '</tbody></table></div></div>';
@@ -723,7 +812,7 @@ function render(){
       'are generated, not real. Run <code>vantage sync</code> to see your own.</div>'
     : '';
   els.app.innerHTML = banner +
-    verdictCard(d) + statsRow(d) + timelineCard(d) +
+    verdictCard(d) + statsRow(d) + todayCard(d) + gridCard(d) + timelineCard(d) +
     '<div class="grid cols-2">' + referrerCard(d) + depthCard(d) + '</div>' +
     repoCard(d) + markersCard(d);
   els.footer.innerHTML = footerHtml(d);

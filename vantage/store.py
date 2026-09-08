@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS daily (
 );
 CREATE INDEX IF NOT EXISTS daily_day ON daily(day);
 
+-- GitHub's own window-level totals for the rolling 14 days. The `uniques` here
+-- is de-duplicated across the WHOLE window, unlike the per-day `uniques` in
+-- `daily`, which only de-duplicate within one day. Summing daily uniques
+-- therefore counts a returning visitor once per day they came back; this table
+-- is the only place an honest "how many people" number can come from.
+CREATE TABLE IF NOT EXISTS windows (
+    repo     TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    metric   TEXT NOT NULL,
+    count    INTEGER NOT NULL DEFAULT 0,
+    uniques  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo, snapshot, metric)
+);
+CREATE INDEX IF NOT EXISTS win_snapshot ON windows(snapshot);
+
 -- Referrers and paths are 14-day rolling top-10 lists, not per-day series.
 -- We keep every snapshot so we can say when a referrer first appeared.
 CREATE TABLE IF NOT EXISTS referrers (
@@ -180,9 +195,32 @@ def save_paths(conn, repo, rows, snapshot=None):
         )
 
 
+def save_window(conn, repo, metric, payload, snapshot=None):
+    """Store GitHub's window-level totals verbatim.
+
+    The traffic endpoints wrap their day series in a `count`/`uniques` pair for
+    the whole 14-day window. That `uniques` is de-duplicated across all 14 days,
+    which is the number a human means by "how many people looked" - and it
+    cannot be reconstructed from the day rows, so it has to be kept as GitHub
+    sends it."""
+    if not payload:
+        return
+    snapshot = snapshot or today()
+    conn.execute(
+        """INSERT INTO windows (repo, snapshot, metric, count, uniques)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(repo, snapshot, metric) DO UPDATE SET
+             count=excluded.count, uniques=excluded.uniques""",
+        (repo, snapshot, metric, payload.get("count", 0) or 0,
+         payload.get("uniques", 0) or 0),
+    )
+
+
 def save_traffic(conn, repo_name, data, snapshot=None):
     save_daily(conn, repo_name, "views", (data.get("views") or {}).get("views"))
     save_daily(conn, repo_name, "clones", (data.get("clones") or {}).get("clones"))
+    save_window(conn, repo_name, "views", data.get("views"), snapshot)
+    save_window(conn, repo_name, "clones", data.get("clones"), snapshot)
     save_referrers(conn, repo_name, data.get("popular/referrers"), snapshot)
     save_paths(conn, repo_name, data.get("popular/paths"), snapshot)
 
@@ -251,6 +289,76 @@ def repo_totals(conn, days=90):
         (since_day(days),),
     )
     return [dict(r) for r in rows]
+
+
+def day_matrix(conn, days=7, metric="views"):
+    """Per-repo, per-day rows for the last `days` days - the answer to "which
+    repos did anyone look at today". Sparse: a repo/day with no traffic has no
+    row, and callers fill the gap with zero."""
+    rows = conn.execute(
+        "SELECT repo, day, count c, uniques u FROM daily "
+        "WHERE metric=? AND day>=? AND (count>0 OR uniques>0) "
+        "ORDER BY repo, day",
+        (metric, since_day(days)),
+    )
+    out = {}
+    for r in rows:
+        out.setdefault(r["repo"], {})[r["day"]] = {"c": r["c"], "u": r["u"]}
+    return out
+
+
+def day_totals(conn, day, metric="views"):
+    """Every repo with traffic on one specific day, busiest first."""
+    rows = conn.execute(
+        "SELECT repo, count c, uniques u FROM daily "
+        "WHERE metric=? AND day=? AND (count>0 OR uniques>0) "
+        "ORDER BY c DESC, u DESC, repo",
+        (metric, day),
+    )
+    return [dict(r) for r in rows]
+
+
+def window_snapshots(conn):
+    """Every snapshot date for which we hold GitHub's window totals, newest
+    first."""
+    return [r["snapshot"] for r in conn.execute(
+        "SELECT DISTINCT snapshot FROM windows ORDER BY snapshot DESC")]
+
+
+def window_totals(conn, snapshot=None, repo=None, metric="views"):
+    """GitHub's own 14-day totals per repo, for one snapshot.
+
+    `uniques` is de-duplicated per repo across the window. Adding it up across
+    repos is an upper bound on people, not a headcount: one person who reads
+    three of your repos is three uniques here. It is still far closer to the
+    truth than summing daily uniques, which also double-counts across days."""
+    snapshot = snapshot or latest_snapshot(conn, "windows")
+    if not snapshot:
+        return []
+    args = [metric, snapshot]
+    sql = ("SELECT repo, count, uniques FROM windows "
+           "WHERE metric=? AND snapshot=?")
+    if repo:
+        sql += " AND repo=?"
+        args.append(repo)
+    sql += " ORDER BY uniques DESC, count DESC"
+    return [dict(r) for r in conn.execute(sql, args)]
+
+
+def snapshot_near(conn, target_day, tolerance=3):
+    """The window snapshot closest to `target_day`, or None if we have nothing
+    within `tolerance` days. Used to compare this fortnight's unique count with
+    the one before it, which is only honest if a snapshot from back then
+    actually exists."""
+    best, best_gap = None, None
+    target = dt.date.fromisoformat(target_day)
+    for snap in window_snapshots(conn):
+        gap = abs((dt.date.fromisoformat(snap) - target).days)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = snap, gap
+    if best_gap is not None and best_gap <= tolerance:
+        return best
+    return None
 
 
 def latest_snapshot(conn, table):

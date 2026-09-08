@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vantage import analyze, classify, store, web  # noqa: E402
+from vantage import analyze, classify, report, store, web  # noqa: E402
 
 
 def day(offset):
@@ -248,6 +248,143 @@ class TestAnalyze(unittest.TestCase):
         just_one = analyze.build(self.conn, days=30, repo="u/r")
         self.assertGreater(everything["summary"]["views_window"],
                            just_one["summary"]["views_window"])
+
+
+class TestUniqueVisitors(unittest.TestCase):
+    """The distinction the report exists to stop blurring: GitHub's 14-day
+    de-duplicated visitor count is NOT the sum of the daily unique counts, and
+    only the first is a headcount."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.conn = store.connect(self.path)
+
+    def tearDown(self):
+        self.conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self.path + suffix)
+            except OSError:
+                pass
+
+    def payload(self):
+        # One visitor who came back on five days: five visitor-days, one person.
+        for i in range(5):
+            store.save_daily(self.conn, "u/r", "views",
+                             [{"timestamp": stamp(-i), "count": 3, "uniques": 1}])
+        store.save_traffic(self.conn, "u/r", {
+            "views": {"count": 15, "uniques": 1, "views": []},
+            "clones": {"count": 4, "uniques": 2, "clones": []},
+        })
+        self.conn.commit()
+        return analyze.build(self.conn, days=30)
+
+    def test_window_uniques_are_kept_not_recomputed(self):
+        d = self.payload()
+        self.assertEqual(d["summary"]["unique_visitors_14d"], 1)
+        self.assertEqual(d["summary"]["visitor_days_14d"], 5)
+
+    def test_per_repo_people_come_from_the_window(self):
+        d = self.payload()
+        row = [r for r in d["repos"] if r["repo"] == "u/r"][0]
+        self.assertEqual(row["unique_visitors_14d"], 1)
+        self.assertEqual(row["visitor_days"], 5)
+
+    def test_missing_window_data_degrades_rather_than_lying(self):
+        # A database written before windows were recorded must not present
+        # visitor-days as if they were people.
+        store.save_daily(self.conn, "u/r", "views",
+                         [{"timestamp": stamp(-1), "count": 3, "uniques": 2}])
+        self.conn.commit()
+        d = analyze.build(self.conn, days=30)
+        self.assertIsNone(d["summary"]["unique_visitors_14d"])
+        self.assertEqual(d["summary"]["visitor_days_14d"], 2)
+        self.assertIn("visitor-days", report.render(d, report.Ink(False)))
+
+    def test_report_never_calls_visitor_days_visitors(self):
+        text = report.render(self.payload(), report.Ink(False))
+        self.assertIn("1 unique visitors", text)
+        self.assertIn("5 visitor-days", text)
+
+
+class TestPerDayPerRepo(unittest.TestCase):
+    """"Which repos did anyone look at today" has to be answerable, including
+    when the answer is "none" - silence there reads as a missing feature."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.conn = store.connect(self.path)
+
+    def tearDown(self):
+        self.conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self.path + suffix)
+            except OSError:
+                pass
+
+    def test_grid_ends_today_and_is_dense(self):
+        store.save_daily(self.conn, "u/a", "views",
+                         [{"timestamp": stamp(-2), "count": 4, "uniques": 2}])
+        self.conn.commit()
+        g = analyze.recent_grid(self.conn, days=7)
+        self.assertEqual(len(g["days"]), 7)
+        self.assertEqual(g["days"][-1], day(0))
+        row = g["rows"][0]
+        self.assertEqual(len(row["cells"]), 7)
+        self.assertEqual(row["cells"][-3]["c"], 4)
+        self.assertEqual(row["cells"][-1]["c"], 0)
+
+    def test_quiet_repos_are_left_out_of_the_grid(self):
+        store.save_daily(self.conn, "u/a", "views",
+                         [{"timestamp": stamp(-1), "count": 1, "uniques": 1}])
+        store.save_daily(self.conn, "u/quiet", "views",
+                         [{"timestamp": stamp(-40), "count": 9, "uniques": 5}])
+        self.conn.commit()
+        g = analyze.recent_grid(self.conn, days=7)
+        self.assertEqual([r["repo"] for r in g["rows"]], ["u/a"])
+
+    def test_repos_viewed_today_sort_first(self):
+        store.save_daily(self.conn, "u/busy-last-week", "views",
+                         [{"timestamp": stamp(-3), "count": 50, "uniques": 20}])
+        store.save_daily(self.conn, "u/read-today", "views",
+                         [{"timestamp": stamp(0), "count": 1, "uniques": 1}])
+        self.conn.commit()
+        g = analyze.recent_grid(self.conn, days=7)
+        self.assertEqual(g["rows"][0]["repo"], "u/read-today")
+
+    def test_today_names_the_repos_viewed(self):
+        store.save_daily(self.conn, "u/a", "views",
+                         [{"timestamp": stamp(0), "count": 6, "uniques": 2}])
+        store.save_daily(self.conn, "u/b", "views",
+                         [{"timestamp": stamp(-1), "count": 9, "uniques": 4}])
+        store.record_sync(self.conn, "", dt.datetime.now().isoformat(), 2, 2, 0, 1.0)
+        self.conn.commit()
+        d = analyze.build(self.conn, days=30)
+        self.assertEqual([r["repo"] for r in d["today"]["repos"]], ["u/a"])
+        self.assertEqual(d["today"]["views"], 6)
+        self.assertTrue(d["today"]["synced_today"])
+
+    def test_a_quiet_day_says_so_out_loud(self):
+        store.save_daily(self.conn, "u/a", "views",
+                         [{"timestamp": stamp(-1), "count": 9, "uniques": 4}])
+        store.record_sync(self.conn, "", dt.datetime.now().isoformat(), 1, 1, 0, 1.0)
+        self.conn.commit()
+        d = analyze.build(self.conn, days=30)
+        self.assertEqual(d["today"]["repos"], [])
+        self.assertIn("No repo has been viewed today",
+                      report.render(d, report.Ink(False)))
+
+    def test_never_synced_today_is_not_reported_as_no_traffic(self):
+        store.save_daily(self.conn, "u/a", "views",
+                         [{"timestamp": stamp(-1), "count": 9, "uniques": 4}])
+        store.record_sync(self.conn, "", day(-3) + "T09:00:00", 1, 1, 0, 1.0)
+        self.conn.commit()
+        d = analyze.build(self.conn, days=30)
+        self.assertFalse(d["today"]["synced_today"])
+        self.assertIn("Not synced today", report.render(d, report.Ink(False)))
 
 
 class TestWebHelpers(unittest.TestCase):

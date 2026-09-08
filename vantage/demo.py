@@ -56,7 +56,8 @@ def seed(conn, days=120, seed_value=7):
     """Fill `conn` with a plausible traffic history. Idempotent-ish: it wipes
     the demo tables first so re-seeding doesn't stack."""
     rng = random.Random(seed_value)
-    for table in ("daily", "referrers", "paths", "repos", "events", "syncs"):
+    for table in ("daily", "referrers", "paths", "repos", "events", "syncs",
+                  "windows"):
         conn.execute("DELETE FROM " + table)
 
     today = dt.date.today()
@@ -92,6 +93,26 @@ def seed(conn, days=120, seed_value=7):
                                  [{"timestamp": d.isoformat() + "T00:00:00Z",
                                    "count": clones,
                                    "uniques": max(1, int(clones * 0.7))}])
+
+    # GitHub's window totals, which the real sync gets straight from the API.
+    # Synthesised the same way GitHub computes them: the 14-day unique count is
+    # de-duplicated across the whole fortnight, so it lands well below the sum
+    # of the daily uniques. Two snapshots, a fortnight apart, so the report has
+    # something honest to compute a delta against.
+    for back in (14, 0):
+        snap = (today - dt.timedelta(days=back)).isoformat()
+        start = (today - dt.timedelta(days=back + 13)).isoformat()
+        end = (today - dt.timedelta(days=back)).isoformat()
+        for metric in ("views", "clones"):
+            rows = conn.execute(
+                "SELECT repo, SUM(count) c, SUM(uniques) u FROM daily "
+                "WHERE metric=? AND day BETWEEN ? AND ? GROUP BY repo",
+                (metric, start, end)).fetchall()
+            for r in rows:
+                store.save_window(conn, r["repo"], metric,
+                                  {"count": r["c"],
+                                   "uniques": max(1, int(r["u"] * 0.62))},
+                                  snapshot=snap)
 
     # Referrer/path snapshots for the last few days, so "first seen" has range.
     for back in (6, 3, 0):

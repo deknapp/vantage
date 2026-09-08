@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vantage import analyze, classify, report, store, web  # noqa: E402
+from vantage import analyze, classify, report, schedule, store, web  # noqa: E402
 
 
 def day(offset):
@@ -403,3 +403,93 @@ class TestWebHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSchedule(unittest.TestCase):
+    """The scheduler's two environment pins, and the health arithmetic.
+
+    Both pins were verified to be load-bearing on this machine: with PATH left
+    at the launchd default `gh` is not found, and with PYTHONPATH unset the
+    checkout install cannot import its own package. Neither failure is visible
+    at install time - the job installs cleanly and then fails nightly into a
+    log nobody reads - so they are asserted here.
+    """
+
+    def test_command_is_absolute_interpreter(self):
+        argv = schedule.command()
+        self.assertTrue(os.path.isabs(argv[0]))
+        self.assertEqual(argv[1:], ["-m", "vantage", "sync", "--quiet"])
+
+    def test_command_passes_db_through(self):
+        self.assertIn("--db", schedule.command(db="/tmp/x.db"))
+
+    def test_package_root_is_importable_from(self):
+        root = schedule.package_root()
+        self.assertTrue(os.path.isdir(os.path.join(root, "vantage")))
+
+    def test_search_path_includes_gh_when_present(self):
+        import shutil
+        gh = shutil.which("gh")
+        parts = schedule.search_path().split(":")
+        self.assertIn("/usr/bin", parts)
+        if gh:
+            self.assertIn(os.path.dirname(gh), parts)
+
+    def test_cron_block_round_trips(self):
+        block = "\n".join([schedule.MARK_BEGIN, "0 9 * * * something",
+                            schedule.MARK_END])
+        text = "MAILTO=me\n0 3 * * * other-job\n" + block + "\n"
+        stripped = schedule._strip_block(text)
+        self.assertNotIn("something", stripped)
+        self.assertIn("other-job", stripped)
+        self.assertIn("MAILTO=me", stripped)
+
+    def test_strip_block_is_idempotent(self):
+        text = "0 3 * * * other-job"
+        self.assertEqual(schedule._strip_block(text), text)
+
+
+class TestScheduleHealth(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.conn = store.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.tmp.name)
+
+    def test_never_synced(self):
+        h = schedule.health(self.conn)
+        self.assertIsNone(h["last_sync"])
+        self.assertIsNone(h["days_since"])
+
+    def test_slack_shrinks_as_the_gap_grows(self):
+        store.record_sync(self.conn, stamp(-3), day(-3) + "T09:00:00",
+                          1, 1, 0, 1.0)
+        h = schedule.health(self.conn)
+        self.assertEqual(h["days_since"], 3)
+        self.assertEqual(h["slack_days"], schedule.WINDOW_DAYS - 3)
+
+    def test_slack_floors_at_zero_past_the_window(self):
+        store.record_sync(self.conn, stamp(-40), day(-40) + "T09:00:00",
+                          1, 1, 0, 1.0)
+        h = schedule.health(self.conn)
+        self.assertEqual(h["slack_days"], 0)
+
+    def test_stored_days_are_not_reported_missing(self):
+        for off in range(1, schedule.WINDOW_DAYS + 1):
+            store.save_daily(self.conn, "a/b", "views",
+                             [{"timestamp": stamp(-off), "count": 1, "uniques": 1}])
+        self.conn.commit()
+        self.assertEqual(schedule.health(self.conn)["missing_in_window"], [])
+
+    def test_gap_days_are_reported_missing(self):
+        for off in (1, 2, 5):
+            store.save_daily(self.conn, "a/b", "views",
+                             [{"timestamp": stamp(-off), "count": 1, "uniques": 1}])
+        self.conn.commit()
+        missing = schedule.health(self.conn)["missing_in_window"]
+        self.assertIn(day(-3), missing)
+        self.assertIn(day(-4), missing)
+        self.assertNotIn(day(-1), missing)

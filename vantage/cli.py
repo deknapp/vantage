@@ -8,7 +8,7 @@ import sys
 import time
 import webbrowser
 
-from . import __version__, analyze, demo, gh, report, store
+from . import __version__, analyze, demo, gh, report, schedule, store
 
 
 def _eprint(*a):
@@ -168,6 +168,86 @@ def cmd_note(args, conn):
     return 0
 
 
+# -------------------------------------------------------------- schedule
+
+def _fmt_health(h, ink):
+    """One paragraph on how close the store is to losing data."""
+    lines = []
+    if h["last_sync"] is None:
+        lines.append(ink.amber("  Never synced.") + "  Run `vantage sync`.")
+        return lines
+    n = h["days_since"]
+    when = "today" if n == 0 else "yesterday" if n == 1 else "%d days ago" % n
+    lines.append("  Last sync %s (%s)." % (ink.bold(when), h["last_sync"][:16].replace("T", " ")))
+    slack = h["slack_days"]
+    if slack is None:
+        pass
+    elif slack <= 0:
+        lines.append(ink.red("  The 14-day window has run out.") +
+                     "  Days before the last sync are gone from GitHub.")
+    elif slack <= 4:
+        lines.append(ink.amber("  %d days of slack left." % slack) +
+                     "  After that, the missed days are unrecoverable.")
+    else:
+        lines.append(ink.dim("  %d days of slack: each sync re-fetches the whole "
+                             "14-day window," % slack))
+        lines.append(ink.dim("  so a missed day costs nothing until the gap reaches 14."))
+    if h["missing_in_window"]:
+        lines.append(ink.dim("  %d day(s) in the window not yet stored - the next "
+                             "sync backfills them." % len(h["missing_in_window"])))
+    return lines
+
+
+def cmd_schedule(args, conn):
+    """Install, inspect or remove the daily sync.
+
+    Status is the default because it is the question actually asked: the
+    scheduler is fire-and-forget, so the only thing worth reporting later is
+    whether it is still firing.
+    """
+    ink = report.Ink(report.use_colour(None if args.color is None else args.color))
+    action = args.action or "status"
+
+    if action == "install":
+        try:
+            hh, mm = args.at.split(":")
+            hour, minute = int(hh), int(mm)
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                raise ValueError
+        except (ValueError, AttributeError):
+            _eprint("error: --at must be HH:MM in 24-hour time")
+            return 2
+        ok, where = schedule.install(hour, minute, db=args.db)
+        if not ok:
+            _eprint(ink.red("error: ") + where)
+            return 1
+        print("  %s daily sync at %s via %s" % (
+            ink.green("installed"), ink.bold(args.at), schedule.backend()))
+        print(ink.dim("    " + where))
+        print(ink.dim("    log: " + schedule.log_path()))
+        for w in schedule.gh_warning():
+            print(ink.amber("  warning: ") + w)
+        return 0
+
+    if action == "remove":
+        gone = schedule.remove()
+        print("  removed" if gone else "  nothing installed")
+        return 0
+
+    info = schedule.installed()
+    if info:
+        state = ink.green("loaded") if info.get("loaded") else ink.amber("present but not loaded")
+        print("  %s daily at %s (%s, %s)" % (
+            ink.bold("scheduled"), info["when"], schedule.backend(), state))
+        print(ink.dim("    " + info["path"]))
+    else:
+        print("  %s  vantage schedule install" % ink.amber("not scheduled."))
+    print()
+    for line in _fmt_health(schedule.health(conn), ink):
+        print(line)
+    return 0
+
+
 def cmd_demo(args, conn):
     """Seed a throwaway database with synthetic traffic and open it.
 
@@ -294,6 +374,14 @@ def build_parser():
     n.add_argument("--list", action="store_true", help="list markers")
     n.add_argument("--remove", type=int, metavar="ID", help="delete a marker")
     n.set_defaults(func=cmd_note)
+
+    sc = sub.add_parser("schedule", parents=[common],
+                        help="install the daily sync so the 14-day window never lapses")
+    sc.add_argument("action", nargs="?", choices=["status", "install", "remove"],
+                    help="default: status")
+    sc.add_argument("--at", default="09:00", metavar="HH:MM",
+                    help="local time to sync (default 09:00)")
+    sc.set_defaults(func=cmd_schedule)
 
     dm = sub.add_parser("demo", parents=[common],
                         help="seed synthetic data and open the dashboard")

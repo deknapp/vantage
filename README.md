@@ -72,6 +72,7 @@ vantage sync            # fetch only
 vantage report          # print only
 vantage serve           # open the dashboard at localhost:7373
 vantage demo            # synthetic data, to see it all without waiting 14 days
+vantage schedule        # install a daily sync, and check it is still firing
 ```
 
 Mark the days that matter, and the timeline shows whether anything followed:
@@ -91,12 +92,65 @@ vantage sync --owner someone-else         # needs push access to their repos
 vantage export --days 365 -o traffic.csv
 ```
 
-Run it on a schedule so history never has a hole in it:
+Run it on a schedule, so the window never lapses:
 
 ```bash
-# crontab -e  — every morning at 9
-0 9 * * * /usr/local/bin/vantage sync --quiet
+vantage schedule install        # daily at 09:00
+vantage schedule install --at 07:30
+vantage schedule                # is it still firing, and how much slack is left
+vantage schedule remove
 ```
+
+## The 14-day window, and what a gap actually costs
+
+GitHub serves only the last 14 days of traffic and deletes the rest. That is
+the reason this tool stores anything at all — but the usual advice that follows
+("sync every day or lose data") is wrong, and worth being precise about,
+because the precise version is less alarming and more useful.
+
+Every sync re-fetches the **whole** 14-day window, and `save_daily` keeps the
+larger of the stored and fetched value for each day. So a missed day costs
+nothing: tomorrow's sync backfills it. What is unrecoverable is a gap **longer
+than the window** — those days aged out of GitHub before anything asked for
+them. `vantage schedule` reports the distance to that cliff rather than nagging
+about yesterday:
+
+```console
+$ vantage schedule
+  scheduled daily at 09:15 (launchd, loaded)
+    ~/Library/LaunchAgents/com.vantage.sync.plist
+
+  Last sync today (2026-09-08 14:24).
+  14 days of slack: each sync re-fetches the whole 14-day window,
+  so a missed day costs nothing until the gap reaches 14.
+```
+
+Referrers and paths are the weaker case, and the status text does not pretend
+otherwise: they are snapshots of a rolling top-10, not a day series, so a
+referrer that appears and disappears inside a gap is never recorded at all.
+That — not the day counts — is the real argument for syncing daily.
+
+### Why launchd on macOS, and not cron
+
+`vantage schedule` writes a launchd agent on macOS and a marked crontab block
+elsewhere. The difference is not neatness. **cron silently skips a job whose
+time passed while the machine was asleep**, and a laptop with a closed lid at
+09:00 every day is precisely how a 14-day gap accumulates without anyone
+noticing. launchd remembers a missed `StartCalendarInterval` and runs it on
+wake, which is the behaviour this tool needs.
+
+Two environment pins in the generated job are load-bearing, and both were
+verified by running the installed agent and then breaking each one:
+
+| Pin | Without it |
+|---|---|
+| `PATH` includes wherever `gh` actually lives | `gh CLI not found` — launchd and cron both run with a minimal PATH that excludes Homebrew, and auth is `gh auth token` |
+| `PYTHONPATH` set to the package root | `No module named vantage` — the shipped `bin/vantage` launcher runs from a checkout by setting `PYTHONPATH` itself, so `python -m vantage` finds nothing without the same hint |
+
+Neither failure is visible at install time. The job installs cleanly, reports
+success, and then fails every night into a log nobody reads — so both are
+asserted in the tests rather than left to be discovered in a month with a hole
+in the history.
 
 ## Views, visitors, and the difference
 

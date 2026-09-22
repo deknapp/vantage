@@ -364,7 +364,11 @@ def cmd_site(args, conn):
                     _eprint("")
                     return 1
                 token = token or cur_token
-        goat.save_config(conn, site=site, token=token)
+        try:
+            goat.save_config(conn, site=site, token=token)
+        except goat.BadToken as e:
+            _eprint(ink.red("error: ") + str(e))
+            return 2
         conn.commit()
         saved_site, saved_token = goat.config(conn)
         if not (saved_site and saved_token):

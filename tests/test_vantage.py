@@ -526,13 +526,13 @@ class TestGoatConfig(unittest.TestCase):
         self.assertEqual(goat.config(self.conn), ("", ""))
 
     def test_round_trip(self):
-        goat.save_config(self.conn, site="myname", token="tok")
+        goat.save_config(self.conn, site="myname", token="tok-0123456789abcdef")
         self.assertTrue(goat.configured(self.conn))
         self.assertEqual(goat.config(self.conn),
-                         ("https://myname.goatcounter.com", "tok"))
+                         ("https://myname.goatcounter.com", "tok-0123456789abcdef"))
 
     def test_environment_overrides_stored(self):
-        goat.save_config(self.conn, site="stored", token="stored-tok")
+        goat.save_config(self.conn, site="stored", token="stored-0123456789abc")
         os.environ["VANTAGE_GOATCOUNTER_SITE"] = "fromenv"
         os.environ["VANTAGE_GOATCOUNTER_TOKEN"] = "env-tok"
         try:
@@ -541,6 +541,25 @@ class TestGoatConfig(unittest.TestCase):
         finally:
             del os.environ["VANTAGE_GOATCOUNTER_SITE"]
             del os.environ["VANTAGE_GOATCOUNTER_TOKEN"]
+
+    def test_a_pasted_url_is_not_stored_as_a_token(self):
+        """The real mistake: the token prompt follows the site prompt, and the
+        page the token is made on is itself a URL."""
+        for bad in ("https://myname.goatcounter.com/user/api",
+                    "myname.goatcounter.com",
+                    "http://x.example/api"):
+            with self.assertRaises(goat.BadToken, msg=bad):
+                goat.save_config(self.conn, token=bad)
+        self.assertFalse(goat.configured(self.conn))
+
+    def test_other_near_misses_rejected(self):
+        for bad in ("", "   ", "short", "has spaces in it here"):
+            with self.assertRaises(goat.BadToken):
+                goat.save_config(self.conn, token=bad)
+
+    def test_a_plausible_token_is_accepted(self):
+        goat.save_config(self.conn, site="myname", token="2h4k9fjs83nfkq0widmzx7")
+        self.assertTrue(goat.configured(self.conn))
 
     def test_client_without_config_refuses(self):
         with self.assertRaises(goat.NotConfigured):

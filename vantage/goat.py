@@ -14,6 +14,7 @@ vantage behaves exactly as it did before.
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -57,6 +58,48 @@ def normalise_site(value):
     return "https://%s.goatcounter.com" % v
 
 
+
+
+def _looks_like_host(v):
+    """A bare hostname, pasted without its scheme -- 'myname.goatcounter.com'.
+
+    Narrow on purpose: dotted, nothing but host characters, and a final label
+    that is alphabetic. A GoatCounter token is a long random string with no
+    dots in it, so this cannot swallow a real one.
+    """
+    if "." not in v or not re.fullmatch(r"[A-Za-z0-9.-]+", v):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z]{2,24}", v.rsplit(".", 1)[1]))
+
+
+class BadToken(GoatError):
+    """Something that cannot be a token, caught before it is stored."""
+
+
+def check_token(value):
+    """Reject the near-misses, rather than storing them and failing later.
+
+    The token prompt sits directly under a prompt for the site, and the page
+    the token is created on is itself a URL, so pasting the wrong one of the
+    two is the obvious mistake. Stored, it comes back much later as a bare
+    401 that reads like a permissions problem rather than a typo.
+    """
+    v = (value or "").strip()
+    if not v:
+        raise BadToken("no token given.")
+    if ("://" in v or v.lower().startswith(("http", "www."))
+            or _looks_like_host(v)):
+        raise BadToken(
+            "that looks like a URL, not a token. The token is the random "
+            "string GoatCounter shows once when you create it, not the "
+            "address of the page you create it on.")
+    if any(c.isspace() for c in v):
+        raise BadToken("a token has no spaces in it -- check what was pasted.")
+    if len(v) < 16:
+        raise BadToken("that is too short to be a token (%d characters)." % len(v))
+    return v
+
+
 def config(conn):
     """(site, token), from the environment first so a shell can override."""
     site = os.environ.get("VANTAGE_GOATCOUNTER_SITE") or store.get_meta(conn, SITE_KEY)
@@ -72,10 +115,13 @@ def configured(conn):
 
 
 def save_config(conn, site=None, token=None):
+    """Store the pair. Raises BadToken rather than saving an obvious mistake."""
+    if token is not None:
+        token = check_token(token)
     if site is not None:
         store.set_meta(conn, SITE_KEY, normalise_site(site))
     if token is not None:
-        store.set_meta(conn, TOKEN_KEY, token.strip())
+        store.set_meta(conn, TOKEN_KEY, token)
 
 
 class Client:

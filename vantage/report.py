@@ -254,6 +254,7 @@ def render(data, ink=None, top=10):
 
     _today_section(A, ink, data, rule, w)
     _grid_section(A, ink, data, rule, w)
+    _site_section(A, ink, data, rule, w)
 
     # --- timeline -------------------------------------------------------
     tl = data["timeline"]
@@ -478,3 +479,50 @@ def _click_label(path):
     """
     s = path[len("click:"):] if path.startswith("click:") else path
     return s.replace(" > ", " → ")
+
+
+def _site_section(A, ink, data, rule, w):
+    """A few lines on the published sites, when there are any.
+
+    Kept to a roll-up on purpose. This report answers "is anyone evaluating
+    me", and the sites are one more input to that, not a second report; the
+    breakdown lives in `vantage site`. The numbers stay visibly apart from
+    the repo figures above because they measure different things -- a repo
+    view is somebody reading source, a site visit is somebody using the thing.
+    """
+    site = data.get("site")
+    if not site:
+        return
+    A("")
+    A(rule)
+    A("")
+    A("  " + ink.bold("Published sites")
+      + ink.dim("  ·  not visible to GitHub's traffic API"))
+    A("")
+    bits = ["%s %s" % (ink.bold(str(site["visits_window"])),
+                       _plural(site["visits_window"], "visit"))]
+    if site["clicks_window"]:
+        bits.append("%s %s" % (ink.bold(str(site["clicks_window"])),
+                               _plural(site["clicks_window"], "link click")))
+    line = "  " + "   ".join(bits)
+    if any(site.get("spark") or []):
+        line += "   " + ink.blue(spark(site["spark"]))
+    A(line)
+    A(ink.dim("     over %d days, across %d %s"
+              % (data["window_days"], site["n_pages"],
+                 _plural(site["n_pages"], "page"))))
+
+    if site.get("top"):
+        A("")
+        width = min(40, max(len(_clip(r["path"], 40)) for r in site["top"]))
+        for r in site["top"]:
+            A("    %s  %s" % (_pad(_clip(r["path"], 40), width),
+                              _pad(str(r["count"]), 5, ">")))
+    if site.get("top_clicks"):
+        A("")
+        labels = [_clip(_click_label(r["path"]), 44) for r in site["top_clicks"]]
+        width = min(44, max(len(s) for s in labels))
+        for r, label in zip(site["top_clicks"], labels):
+            A("    %s  %s" % (_pad(label, width), _pad(str(r["count"]), 5, ">")))
+    A("")
+    A(ink.dim("     `vantage site` for the full breakdown and referrers."))

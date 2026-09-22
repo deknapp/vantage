@@ -215,6 +215,27 @@ def build(conn, days=90, repo=None):
         k["count"] += p["count"]
         k["uniques"] += p["uniques"]
 
+    # The published sites, when GoatCounter is set up. A compact roll-up only:
+    # `vantage site` has the detail. Never folded into the repo numbers above,
+    # because a repo view and a site visit are different measurements.
+    site_pages = store.site_totals(conn, days=window, kind="page")
+    site_clicks = store.site_totals(conn, days=window, kind="click")
+    site_block = None
+    if site_pages or site_clicks:
+        site_series = store.site_series(conn, days=window, kind="page")
+        recent_days = {d["day"] for d in site_series[-14:]}
+        site_block = {
+            "visits_window": sum(r["count"] for r in site_pages),
+            "visits_14d": sum(d["count"] for d in site_series if d["day"] in recent_days),
+            "clicks_window": sum(r["count"] for r in site_clicks),
+            "n_pages": len(site_pages),
+            "top": site_pages[:5],
+            "top_clicks": site_clicks[:5],
+            "spark": [d["count"] for d in site_series],
+            "last_day": max((r["last_day"] for r in site_pages + site_clicks),
+                            default=None),
+        }
+
     return {
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "is_demo": demo.is_demo(conn),
@@ -245,6 +266,7 @@ def build(conn, days=90, repo=None):
             "depth_score": round(depth, 3),
             "comparable": comparable,
         },
+        "site": site_block,
         "verdict": {"text": verdict_text, "level": verdict_level},
         "today": today_block,
         "recent": grid,

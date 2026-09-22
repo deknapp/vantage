@@ -615,6 +615,30 @@ class TestSiteStore(unittest.TestCase):
         self.assertEqual(store.site_refs(self.conn),
                          [{"referrer": "linkedin.com", "count": 5}])
 
+    def test_rollup_appears_in_the_main_report(self):
+        """`vantage` is what gets typed, so the sites have to show up there."""
+        store.save_site_hits(self.conn, self.hits())
+        self.conn.commit()
+        data = analyze.build(self.conn, days=90)
+        self.assertIsNotNone(data["site"])
+        self.assertEqual(data["site"]["visits_window"], 16)
+        self.assertEqual(data["site"]["clicks_window"], 2)
+        out = report.render(data, report.Ink(False))
+        self.assertIn("Published sites", out)
+        self.assertIn("16 visits", out)
+
+    def test_no_site_block_without_site_data(self):
+        data = analyze.build(self.conn, days=90)
+        self.assertIsNone(data["site"])
+        self.assertNotIn("Published sites", report.render(data, report.Ink(False)))
+
+    def test_site_visits_are_not_folded_into_repo_views(self):
+        """Different measurements. Summing them would invent a number."""
+        store.save_site_hits(self.conn, self.hits())
+        self.conn.commit()
+        data = analyze.build(self.conn, days=90)
+        self.assertEqual(data["summary"]["views_window"], 0)
+
     def test_report_renders_without_data(self):
         out = report.render_site({"site": "", "days": 90, "coverage": {},
                                   "pages": [], "clicks": [], "series": [],

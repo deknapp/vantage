@@ -260,6 +260,9 @@ If your page also counts clicks on outbound links as GoatCounter events,
 `vantage site` lists them separately from page views — which link, and from
 which page, rather than a single visit count.
 
+Once there is data, plain `vantage` shows a short roll-up of it too, so the
+sites are not hidden behind a command you have to remember to type.
+
 Site numbers are reported on their own and never summed with repo views. They
 are different measurements: one is somebody reading source, the other is
 somebody using the thing.

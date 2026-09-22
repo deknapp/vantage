@@ -394,3 +394,87 @@ def _wrap(text, width, indent):
     if cur:
         lines.append(cur)
     return ("\n" + indent).join(lines)
+
+
+def render_site(data, ink=None, top=15):
+    """The published sites: visits per site, and clicks on the links between.
+
+    Deliberately separate from `render`. Repo views and site visits are not
+    the same measurement and summing them would invent a number -- one is a
+    person reading source, the other is a person using the thing.
+    """
+    ink = ink or Ink(False)
+    out = []
+    site = data.get("site") or ""
+    cov = data.get("coverage") or {}
+    days = data.get("days", 90)
+
+    head = ink.bold("Published sites")
+    if cov.get("first_day"):
+        head += ink.dim("   %s → %s" % (cov["first_day"], cov["last_day"]))
+    out.append("")
+    out.append("  " + head)
+    if site:
+        out.append("  " + ink.dim(site))
+    out.append("")
+
+    pages = data.get("pages") or []
+    clicks = data.get("clicks") or []
+    total = sum(r["count"] for r in pages)
+    series = [r["count"] for r in data.get("series") or []]
+
+    if not pages and not clicks:
+        out.append("  " + ink.dim("No visits recorded yet in the last %d days." % days))
+        out.append("")
+        return "\n".join(out)
+
+    line = "  %s %s" % (ink.bold(str(total)), _plural(total, "visit"))
+    if series:
+        line += "   " + ink.blue(spark(series))
+    out.append(line)
+    out.append("")
+
+    if pages:
+        out.append("  " + ink.grey("PER PAGE"))
+        width = min(48, max((len(_clip(r["path"], 48)) for r in pages), default=10))
+        peak = max(r["count"] for r in pages)
+        for r in pages[:top]:
+            out.append("    %s  %s  %s" % (
+                _pad(_clip(r["path"], 48), width),
+                _pad(str(r["count"]), 5, ">"),
+                ink.dim(_bar(r["count"] / peak if peak else 0, 16))))
+        out.append("")
+
+    if clicks:
+        out.append("  " + ink.grey("LINK CLICKS"))
+        labels = [_clip(_click_label(r["path"]), 52) for r in clicks]
+        width = min(52, max((len(s) for s in labels), default=10))
+        peak = max(r["count"] for r in clicks)
+        for r, label in list(zip(clicks, labels))[:top]:
+            out.append("    %s  %s  %s" % (
+                _pad(label, width),
+                _pad(str(r["count"]), 5, ">"),
+                ink.dim(_bar(r["count"] / peak if peak else 0, 16))))
+        out.append("")
+
+    refs = data.get("refs") or []
+    if refs:
+        out.append("  " + ink.grey("REFERRERS"))
+        width = min(40, max((len(_clip(r["referrer"], 40)) for r in refs), default=10))
+        for r in refs[:top]:
+            out.append("    %s  %s" % (
+                _pad(_clip(r["referrer"], 40), width),
+                _pad(str(r["count"]), 5, ">")))
+        out.append("")
+
+    return "\n".join(out)
+
+
+def _click_label(path):
+    """'click:home > github.com/you/proj' -> 'home → github.com/you/proj'.
+
+    The stored form is whatever the site's own script sends; this only tidies
+    the shape vantage's own snippet uses and leaves anything else alone.
+    """
+    s = path[len("click:"):] if path.startswith("click:") else path
+    return s.replace(" > ", " → ")

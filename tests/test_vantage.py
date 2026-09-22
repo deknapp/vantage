@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vantage import analyze, classify, report, schedule, store, web  # noqa: E402
+from vantage import analyze, classify, goat, report, schedule, store, web  # noqa: E402
 
 
 def day(offset):
@@ -401,10 +401,6 @@ class TestWebHelpers(unittest.TestCase):
         self.assertEqual(web._int("99999", 90), 3650)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class TestSchedule(unittest.TestCase):
     """The scheduler's two environment pins, and the health arithmetic.
 
@@ -493,3 +489,122 @@ class TestScheduleHealth(unittest.TestCase):
         self.assertIn(day(-3), missing)
         self.assertIn(day(-4), missing)
         self.assertNotIn(day(-1), missing)
+
+
+class TestGoatConfig(unittest.TestCase):
+    """The GoatCounter side is optional and belongs to whoever runs vantage.
+
+    Nothing about it may be baked in, and the site can be given in any of the
+    three shapes a person might copy out of their browser.
+    """
+
+    def setUp(self):
+        fd, self.db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.conn = store.connect(self.db)
+        for var in ("VANTAGE_GOATCOUNTER_SITE", "VANTAGE_GOATCOUNTER_TOKEN",
+                    "GOATCOUNTER_TOKEN"):
+            os.environ.pop(var, None)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.db)
+
+    def test_site_shapes_all_normalise(self):
+        for given in ("myname", "myname.goatcounter.com",
+                      "https://myname.goatcounter.com",
+                      "https://myname.goatcounter.com/"):
+            self.assertEqual(goat.normalise_site(given),
+                             "https://myname.goatcounter.com", given)
+
+    def test_self_hosted_host_is_kept(self):
+        self.assertEqual(goat.normalise_site("stats.example.org"),
+                         "https://stats.example.org")
+
+    def test_unconfigured_by_default(self):
+        self.assertFalse(goat.configured(self.conn))
+        self.assertEqual(goat.config(self.conn), ("", ""))
+
+    def test_round_trip(self):
+        goat.save_config(self.conn, site="myname", token="tok")
+        self.assertTrue(goat.configured(self.conn))
+        self.assertEqual(goat.config(self.conn),
+                         ("https://myname.goatcounter.com", "tok"))
+
+    def test_environment_overrides_stored(self):
+        goat.save_config(self.conn, site="stored", token="stored-tok")
+        os.environ["VANTAGE_GOATCOUNTER_SITE"] = "fromenv"
+        os.environ["VANTAGE_GOATCOUNTER_TOKEN"] = "env-tok"
+        try:
+            self.assertEqual(goat.config(self.conn),
+                             ("https://fromenv.goatcounter.com", "env-tok"))
+        finally:
+            del os.environ["VANTAGE_GOATCOUNTER_SITE"]
+            del os.environ["VANTAGE_GOATCOUNTER_TOKEN"]
+
+    def test_client_without_config_refuses(self):
+        with self.assertRaises(goat.NotConfigured):
+            goat.client(self.conn)
+
+
+class TestSiteStore(unittest.TestCase):
+    def setUp(self):
+        fd, self.db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.conn = store.connect(self.db)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.db)
+
+    def hits(self):
+        return [
+            {"path": "/", "title": "Home", "event": False,
+             "stats": [{"day": day(-2), "daily": 4}, {"day": day(-1), "daily": 9}]},
+            {"path": "/otowi/", "title": "otowi", "event": False,
+             "stats": [{"day": day(-1), "daily": 3}]},
+            {"path": "click:home > github.com/x/otowi", "event": True,
+             "stats": [{"day": day(-1), "daily": 2}]},
+        ]
+
+    def test_pages_and_clicks_are_separated(self):
+        store.save_site_hits(self.conn, self.hits())
+        pages = store.site_totals(self.conn, days=30, kind="page")
+        clicks = store.site_totals(self.conn, days=30, kind="click")
+        self.assertEqual([(r["path"], r["count"]) for r in pages],
+                         [("/", 13), ("/otowi/", 3)])
+        self.assertEqual([(r["path"], r["count"]) for r in clicks],
+                         [("click:home > github.com/x/otowi", 2)])
+
+    def test_counts_only_grow(self):
+        """Today is re-fetched while it is still running, and a later call can
+        legitimately return a smaller number than an earlier one did."""
+        store.save_site_hits(self.conn, self.hits())
+        store.save_site_hits(self.conn, [
+            {"path": "/", "event": False, "stats": [{"day": day(-1), "daily": 1}]}])
+        self.assertEqual(store.site_totals(self.conn, days=30)[0]["count"], 13)
+
+    def test_window_excludes_older_days(self):
+        store.save_site_hits(self.conn, [
+            {"path": "/", "event": False,
+             "stats": [{"day": day(-400), "daily": 50}, {"day": day(-1), "daily": 2}]}])
+        self.assertEqual(store.site_totals(self.conn, days=90)[0]["count"], 2)
+
+    def test_referrers_take_the_larger_count(self):
+        store.save_site_refs(self.conn, [{"name": "linkedin.com", "count": 5}])
+        store.save_site_refs(self.conn, [{"name": "linkedin.com", "count": 2}])
+        self.assertEqual(store.site_refs(self.conn),
+                         [{"referrer": "linkedin.com", "count": 5}])
+
+    def test_report_renders_without_data(self):
+        out = report.render_site({"site": "", "days": 90, "coverage": {},
+                                  "pages": [], "clicks": [], "series": [],
+                                  "refs": []}, report.Ink(False))
+        self.assertIn("No visits recorded yet", out)
+
+    def test_click_label_is_tidied(self):
+        self.assertEqual(report._click_label("click:home > github.com/x/y"),
+                         "home → github.com/x/y")
+        self.assertEqual(report._click_label("/some/page"), "/some/page")
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

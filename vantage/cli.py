@@ -8,7 +8,7 @@ import sys
 import time
 import webbrowser
 
-from . import __version__, analyze, demo, gh, report, schedule, store
+from . import __version__, analyze, demo, gh, goat, report, schedule, store
 
 
 def _eprint(*a):
@@ -75,6 +75,8 @@ def cmd_sync(args, conn):
         n_ok += 1
     conn.commit()
 
+    _sync_site(conn, ink, quiet=quiet)
+
     elapsed = time.time() - t0
     store.record_sync(conn, started,
                       dt.datetime.now().isoformat(timespec="seconds"),
@@ -86,6 +88,38 @@ def cmd_sync(args, conn):
             (", %d failed" % n_failed) if n_failed else "")))
     return 0
 
+
+
+def _sync_site(conn, ink, quiet=False, days=365):
+    """Pull the published sites' own visitors, if GoatCounter is set up.
+
+    GitHub's traffic API counts views of a repository page and cannot see a
+    GitHub Pages visit at all, so this is the only source for the sites
+    themselves. It is optional: a machine with no token configured syncs
+    exactly as it did before, silently.
+    """
+    if not goat.configured(conn):
+        return None
+    start = store.since_day(days)
+    try:
+        client = goat.client(conn)
+        hits = client.hits(start, store.today())
+        refs = client.toprefs(start, store.today())
+    except goat.GoatError as e:
+        # The site numbers are additive. Losing them must not cost the repo
+        # traffic that was already fetched and committed.
+        if not quiet:
+            _eprint(ink.amber("  site analytics skipped: ") + str(e))
+        return None
+    store.save_site_hits(conn, hits)
+    store.save_site_refs(conn, refs)
+    conn.commit()
+    pages = sum(1 for h in hits if not h.get("event"))
+    clicks = sum(1 for h in hits if h.get("event"))
+    if not quiet:
+        _eprint(ink.dim("  site: %d page%s, %d tracked link%s" % (
+            pages, "" if pages == 1 else "s", clicks, "" if clicks == 1 else "s")))
+    return {"pages": pages, "clicks": clicks}
 
 # ---------------------------------------------------------------- report
 
@@ -306,6 +340,71 @@ def cmd_db(args, conn):
 
 # ------------------------------------------------------------------ main
 
+# ------------------------------------------------------------------ site
+
+def cmd_site(args, conn):
+    """Visits to the published sites, which GitHub's traffic API cannot see."""
+    ink = report.Ink(report.use_colour(None if args.color is None else args.color))
+
+    if args.login or args.set_site or args.set_token:
+        site = args.set_site
+        token = args.set_token
+        if args.login:
+            cur_site, cur_token = goat.config(conn)
+            if site is None:
+                prompt = "GoatCounter site" + (" [%s]" % cur_site if cur_site else
+                                               " (e.g. myname or myname.goatcounter.com)")
+                site = input(prompt + ": ").strip() or cur_site
+            if token is None:
+                try:
+                    import getpass
+                    token = getpass.getpass(
+                        "API token%s: " % (" [keep existing]" if cur_token else "")).strip()
+                except (EOFError, KeyboardInterrupt):
+                    _eprint("")
+                    return 1
+                token = token or cur_token
+        goat.save_config(conn, site=site, token=token)
+        conn.commit()
+        saved_site, saved_token = goat.config(conn)
+        if not (saved_site and saved_token):
+            _eprint(ink.red("error: ") + "need both a site and a token.")
+            return 2
+        _eprint(ink.green("✓ ") + "saved %s" % saved_site)
+        if not args.no_sync:
+            _sync_site(conn, ink, quiet=args.quiet)
+        return 0
+
+    if not goat.configured(conn):
+        _eprint("No GoatCounter site configured.\n\n"
+                "  Add the counter to your pages, create an API token under\n"
+                "  [username] → API in your GoatCounter settings, then run:\n\n"
+                "      vantage site --login\n")
+        return 1
+
+    if not args.no_sync:
+        _sync_site(conn, ink, quiet=True)
+
+    data = {
+        "site": goat.config(conn)[0],
+        "days": args.days,
+        "coverage": store.site_coverage(conn),
+        "pages": store.site_totals(conn, days=args.days, kind="page"),
+        "clicks": store.site_totals(conn, days=args.days, kind="click"),
+        "series": store.site_series(conn, days=args.days, kind="page"),
+        "refs": store.site_refs(conn),
+    }
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    if not data["coverage"].get("first_day"):
+        _eprint("No site data yet. Check the counter is on your pages, then "
+                "run `vantage site` again.")
+        return 1
+    print(report.render_site(data, ink, top=args.top))
+    return 0
+
+
 def build_parser():
     # Shared flags, accepted either before or after the subcommand. SUPPRESS
     # keeps an unset subcommand flag from clobbering the value given globally.
@@ -399,6 +498,20 @@ def build_parser():
     e.add_argument("--days", type=int, default=365)
     e.add_argument("-o", "--out", help="file to write (default stdout)")
     e.set_defaults(func=cmd_export)
+
+    st = sub.add_parser("site", parents=[common],
+                        help="visits to your published sites (GoatCounter)")
+    st.add_argument("--login", action="store_true",
+                    help="set the GoatCounter site and API token, interactively")
+    st.add_argument("--set-site", metavar="SITE",
+                    help="site name, host or URL (e.g. myname, myname.goatcounter.com)")
+    st.add_argument("--set-token", metavar="TOKEN", help="API token")
+    st.add_argument("--days", type=int, default=90, help="window to report (default 90)")
+    st.add_argument("--top", type=int, default=15, help="rows per table (default 15)")
+    st.add_argument("--no-sync", action="store_true", help="report without fetching first")
+    st.add_argument("--quiet", action="store_true", help="suppress progress output")
+    st.add_argument("--json", action="store_true", help="machine-readable output")
+    st.set_defaults(func=cmd_site)
 
     d = sub.add_parser("db", parents=[common], help="print the database path")
     d.set_defaults(func=cmd_db)

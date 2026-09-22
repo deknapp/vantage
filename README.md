@@ -73,6 +73,7 @@ vantage report          # print only
 vantage serve           # open the dashboard at localhost:7373
 vantage demo            # synthetic data, to see it all without waiting 14 days
 vantage schedule        # install a daily sync, and check it is still firing
+vantage site            # visits to your published sites, if you set that up
 ```
 
 Mark the days that matter, and the timeline shows whether anything followed:
@@ -233,6 +234,36 @@ blue ramp where **darker means stronger evidence**, so a short dark bar
 (three visits from Greenhouse) visibly outranks a long pale one (fifty from
 Hacker News).
 
+## Your published sites, which GitHub cannot see
+
+GitHub's traffic API counts views of a *repository page*. It says nothing at all
+about a site you publish — GitHub Pages has no server-side analytics, no logs
+and no API, so a visit to your site is invisible to everything above.
+
+If you run [GoatCounter](https://www.goatcounter.com) (free for personal sites,
+no cookies, no consent banner), vantage will read it alongside the repo traffic:
+
+```bash
+vantage site --login            # asks for the site name and an API token
+vantage site                    # visits per page, link clicks, referrers
+vantage site --days 365 --json
+```
+
+The token is made under **[username] → API** in your GoatCounter settings and
+is stored in your own database. Nothing is hard-coded: the site can be given as
+`myname`, `myname.goatcounter.com` or a full URL, a self-hosted instance works
+the same way, and `VANTAGE_GOATCOUNTER_SITE` and `VANTAGE_GOATCOUNTER_TOKEN`
+override the stored values. Once configured, `vantage sync` picks the site up
+too; skip the setup and vantage behaves exactly as it did before.
+
+If your page also counts clicks on outbound links as GoatCounter events,
+`vantage site` lists them separately from page views — which link, and from
+which page, rather than a single visit count.
+
+Site numbers are reported on their own and never summed with repo views. They
+are different measurements: one is somebody reading source, the other is
+somebody using the thing.
+
 ## What this cannot tell you
 
 Stated plainly, because a tool that implies more than it knows is worse than no
@@ -254,6 +285,9 @@ tool:
   domain *first* appeared, but it cannot rebuild the days in between.
 - **Clone counts include CI, mirrors, and bots,** so they run high and mean much
   less than views.
+- **Site analytics need a script in the page,** so they miss anyone running an
+  ad blocker and are a floor, not a census. Nothing on GitHub Pages avoids that
+  without a custom domain behind a proxy.
 - **Traffic needs push access,** so this works for your own repos and ones you
   collaborate on. Nobody else's.
 

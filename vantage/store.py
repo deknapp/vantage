@@ -98,6 +98,28 @@ CREATE TABLE IF NOT EXISTS syncs (
     seconds     REAL DEFAULT 0
 );
 
+-- Visitors to the published sites, from GoatCounter. Separate from the
+-- GitHub tables above because it answers a different question: `daily` and
+-- `paths` count views of a repository page, and nothing GitHub offers counts
+-- a visit to a GitHub Pages site. `kind` is 'page' or 'click' -- GoatCounter
+-- returns page views and the outbound-link events in one list, flagged.
+CREATE TABLE IF NOT EXISTS site_paths (
+    path    TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    kind    TEXT NOT NULL DEFAULT 'page',
+    title   TEXT DEFAULT '',
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (path, day)
+);
+CREATE INDEX IF NOT EXISTS site_paths_day ON site_paths(day);
+
+CREATE TABLE IF NOT EXISTS site_refs (
+    snapshot TEXT NOT NULL,
+    referrer TEXT NOT NULL,
+    count    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot, referrer)
+);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -400,6 +422,93 @@ def current_paths(conn, repo=None):
         args.append(repo)
     sql += " ORDER BY uniques DESC, count DESC"
     return [dict(r) for r in conn.execute(sql, args)]
+
+
+def get_meta(conn, key, default=None):
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_meta(conn, key, value):
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+
+
+def save_site_hits(conn, hits):
+    """Store GoatCounter's per-path daily series.
+
+    Each hit carries its own day series, so this writes days rather than a
+    snapshot: unlike GitHub, GoatCounter does not forget, and asking it again
+    for an old day returns the same number. Counts still only grow, because
+    today's row is asked for again while the day is still running.
+    """
+    n = 0
+    for h in hits or []:
+        path = h.get("path") or "?"
+        kind = "click" if h.get("event") else "page"
+        title = h.get("title") or ""
+        for s in h.get("stats") or []:
+            day = s.get("day")
+            if not day:
+                continue
+            conn.execute(
+                """INSERT INTO site_paths (path, day, kind, title, count)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(path, day) DO UPDATE SET
+                     kind=excluded.kind, title=excluded.title,
+                     count=MAX(site_paths.count, excluded.count)""",
+                (path, day, kind, title, s.get("daily", 0) or 0),
+            )
+            n += 1
+    return n
+
+
+def save_site_refs(conn, rows, snapshot=None):
+    snapshot = snapshot or today()
+    for r in rows or []:
+        name = r.get("name") or r.get("referrer") or r.get("id") or "(none)"
+        conn.execute(
+            """INSERT INTO site_refs (snapshot, referrer, count)
+               VALUES (?,?,?)
+               ON CONFLICT(snapshot, referrer) DO UPDATE SET
+                 count=MAX(site_refs.count, excluded.count)""",
+            (snapshot, str(name), r.get("count", 0) or 0),
+        )
+
+
+def site_totals(conn, days=90, kind="page"):
+    """Per-path totals over the window, biggest first."""
+    return [dict(r) for r in conn.execute(
+        "SELECT path, title, SUM(count) count, MAX(day) last_day "
+        "FROM site_paths WHERE kind=? AND day >= ? "
+        "GROUP BY path ORDER BY count DESC, path", (kind, since_day(days)))]
+
+
+def site_series(conn, days=90, kind="page"):
+    """Daily totals over the window, oldest first."""
+    return [dict(r) for r in conn.execute(
+        "SELECT day, SUM(count) count FROM site_paths "
+        "WHERE kind=? AND day >= ? GROUP BY day ORDER BY day",
+        (kind, since_day(days)))]
+
+
+def site_refs(conn, snapshot=None):
+    snap = snapshot or latest_snapshot(conn, "site_refs")
+    if not snap:
+        return []
+    return [dict(r) for r in conn.execute(
+        "SELECT referrer, count FROM site_refs WHERE snapshot=? "
+        "ORDER BY count DESC, referrer", (snap,))]
+
+
+def site_coverage(conn):
+    row = conn.execute(
+        "SELECT MIN(day) first_day, MAX(day) last_day, COUNT(DISTINCT day) n_days "
+        "FROM site_paths").fetchone()
+    return dict(row) if row and row["first_day"] else {}
 
 
 def events(conn, days=None):

@@ -452,7 +452,12 @@ def save_site_hits(conn, hits):
         title = h.get("title") or ""
         for s in h.get("stats") or []:
             day = s.get("day")
-            if not day:
+            count = s.get("daily", 0) or 0
+            # GoatCounter returns the whole requested range, one entry per day,
+            # zeros included. Storing those would be 365 empty rows per path and
+            # would make the coverage line claim history back to the first day
+            # asked for rather than the first day anything happened.
+            if not day or not count:
                 continue
             conn.execute(
                 """INSERT INTO site_paths (path, day, kind, title, count)
@@ -460,7 +465,7 @@ def save_site_hits(conn, hits):
                    ON CONFLICT(path, day) DO UPDATE SET
                      kind=excluded.kind, title=excluded.title,
                      count=MAX(site_paths.count, excluded.count)""",
-                (path, day, kind, title, s.get("daily", 0) or 0),
+                (path, day, kind, title, count),
             )
             n += 1
     return n

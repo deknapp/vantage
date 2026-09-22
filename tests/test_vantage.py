@@ -561,6 +561,24 @@ class TestGoatConfig(unittest.TestCase):
         goat.save_config(self.conn, site="myname", token="2h4k9fjs83nfkq0widmzx7")
         self.assertTrue(goat.configured(self.conn))
 
+    def test_no_end_date_is_sent_by_default(self):
+        """GoatCounter reads a bare date as UTC midnight, so sending today's
+        local date as `end` drops everything recorded since then -- which
+        west of UTC is all of today. The documented default is 'now'."""
+        sent = []
+
+        class FakeClient(goat.Client):
+            def get(self, path, params=None, retries=3):
+                sent.append((path, dict(params or {})))
+                return {"hits": [], "stats": [], "more": False}
+
+        c = FakeClient("myname", "tok-0123456789abcdef")
+        c.hits("2026-09-14")
+        c.toprefs("2026-09-14")
+        self.assertTrue(sent)
+        for path, params in sent:
+            self.assertIsNone(params.get("end"), path)
+
     def test_client_without_config_refuses(self):
         with self.assertRaises(goat.NotConfigured):
             goat.client(self.conn)
@@ -585,6 +603,16 @@ class TestSiteStore(unittest.TestCase):
             {"path": "click:home > github.com/x/otowi", "event": True,
              "stats": [{"day": day(-1), "daily": 2}]},
         ]
+
+    def test_empty_days_are_not_stored(self):
+        """GoatCounter returns the whole range with zeros filled in. Keeping
+        them would date the history to the first day asked for."""
+        store.save_site_hits(self.conn, [
+            {"path": "/", "event": False,
+             "stats": [{"day": day(-300), "daily": 0}, {"day": day(-1), "daily": 2}]}])
+        cov = store.site_coverage(self.conn)
+        self.assertEqual(cov["first_day"], day(-1))
+        self.assertEqual(cov["n_days"], 1)
 
     def test_pages_and_clicks_are_separated(self):
         store.save_site_hits(self.conn, self.hits())

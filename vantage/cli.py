@@ -103,8 +103,9 @@ def _sync_site(conn, ink, quiet=False, days=365):
     start = store.since_day(days)
     try:
         client = goat.client(conn)
-        hits = client.hits(start, store.today())
-        refs = client.toprefs(start, store.today())
+        # No end date: see the note in goat.Client.
+        hits = client.hits(start)
+        refs = client.toprefs(start)
     except goat.GoatError as e:
         # The site numbers are additive. Losing them must not cost the repo
         # traffic that was already fetched and committed.

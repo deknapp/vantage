@@ -183,7 +183,13 @@ class Client:
 
     # -- endpoints -------------------------------------------------------
 
-    def hits(self, start, end, limit=200):
+    # `end` is left out by default, and callers should keep leaving it out.
+    # GoatCounter reads a bare date as an instant at UTC midnight, so passing
+    # today's *local* date as the end silently drops everything recorded since
+    # then -- and west of UTC that is the whole of today. The documented
+    # default for `end` is the current time, which is what we want.
+
+    def hits(self, start, end=None, limit=200):
         """Paths and events with visitor counts, plus a daily series each.
 
         Events (the link clicks) come back in the same list as page views,
@@ -206,11 +212,11 @@ class Client:
                 break
         return out
 
-    def toprefs(self, start, end, limit=100):
+    def toprefs(self, start, end=None, limit=100):
         data = self.get("/stats/toprefs", {"start": start, "end": end, "limit": limit})
         return data.get("stats") or data.get("refs") or []
 
-    def total(self, start, end):
+    def total(self, start, end=None):
         return self.get("/stats/total", {"start": start, "end": end})
 
 

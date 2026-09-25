@@ -348,17 +348,6 @@ def render(data, ink=None, top=10):
                   % data["window_days"]))
         A(ink.dim("     visitors over its own rolling 14 days, de-duplicated"))
 
-    # --- events ----------------------------------------------------------
-    ev = data["events"][:5]
-    if ev:
-        A("")
-        A(rule)
-        A("  " + ink.bold("Your markers"))
-        A("")
-        for e in ev:
-            A("  %s  %s %s" % (ink.dim(e["day"]), e["label"],
-                               ink.dim("(" + e["kind"] + ")")))
-
     # --- footer ----------------------------------------------------------
     A("")
     A(rule)
